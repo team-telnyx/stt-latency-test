@@ -29,6 +29,7 @@ class Result:
     engine: str
     model: Optional[str]
     audio_seconds: float
+    rtt_ms: Optional[float]
     ttf_interim_ms: Optional[float]
     ttf_final_ms: Optional[float]
     ttf_last_final_ms: Optional[float]
@@ -69,8 +70,25 @@ async def stream_one(path: str, engine: str, model: Optional[str], api_key: str,
     finals_count = 0
     error: Optional[str] = None
 
+    rtt_ms: Optional[float] = None
+
     try:
-        async with websockets.connect(url, additional_headers=headers) as ws:
+        async with websockets.connect(url, additional_headers=headers, close_timeout=1) as ws:
+
+            # Probe WebSocket RTT before streaming so we can subtract network cost
+            # from the latency metrics. Median of 3 ping/pongs.
+            samples: list[float] = []
+            for _ in range(3):
+                t0 = time.perf_counter()
+                pong_waiter = await ws.ping()
+                try:
+                    await asyncio.wait_for(pong_waiter, timeout=5.0)
+                    samples.append((time.perf_counter() - t0) * 1000)
+                except asyncio.TimeoutError:
+                    break
+            if samples:
+                samples.sort()
+                rtt_ms = samples[len(samples) // 2]
 
             async def send_audio() -> None:
                 with open(path, "rb") as f:
@@ -81,6 +99,9 @@ async def stream_one(path: str, engine: str, model: Optional[str], api_key: str,
                 # Tell Telnyx we're done — finalize remaining audio immediately
                 await ws.send(json.dumps({"type": "CloseStream"}))
 
+            # Reset clock now that connection + RTT probe are done — metrics
+            # below measure latency from "first audio byte sent" forward.
+            t_start = time.perf_counter()
             send_task = asyncio.create_task(send_audio())
 
             while True:
@@ -126,6 +147,7 @@ async def stream_one(path: str, engine: str, model: Optional[str], api_key: str,
         engine=engine,
         model=model,
         audio_seconds=round(duration, 3),
+        rtt_ms=round(rtt_ms, 1) if rtt_ms is not None else None,
         ttf_interim_ms=round(ttf_interim, 1) if ttf_interim is not None else None,
         ttf_final_ms=round(ttf_first_final, 1) if ttf_first_final is not None else None,
         ttf_last_final_ms=round(ttf_last_final, 1) if ttf_last_final is not None else None,
@@ -141,17 +163,33 @@ def fmt(ms: Optional[float]) -> str:
     return f"{ms:.0f}ms" if ms is not None else "—"
 
 
+def adj(ms: Optional[float], rtt: Optional[float]) -> str:
+    if ms is None or rtt is None:
+        return "—"
+    return f"{max(ms - rtt, 0):.0f}ms"
+
+
 def print_summary(results: list[Result]) -> None:
     print()
-    header = f"{'engine/model':<22} {'audio':>7} {'first-int':>10} {'first-fin':>10} {'last-fin':>10} {'total':>9}"
+    header = (
+        f"{'engine/model':<22} {'audio':>7} {'RTT':>7} "
+        f"{'first-int':>10} {'first-fin':>10} {'last-fin':>10} {'total':>9}"
+    )
     print(header)
     print("-" * len(header))
     for r in results:
         label = r.engine + (f"/{r.model}" if r.model else "")
         print(
-            f"{label:<22} {r.audio_seconds:>6.2f}s "
+            f"{label:<22} {r.audio_seconds:>6.2f}s {fmt(r.rtt_ms):>7} "
             f"{fmt(r.ttf_interim_ms):>10} {fmt(r.ttf_final_ms):>10} "
             f"{fmt(r.ttf_last_final_ms):>10} {r.total_ms:>7.0f}ms"
+        )
+        # Network-adjusted view: subtract one RTT to approximate service-only latency
+        print(
+            f"{'  (− RTT)':<22} {'':>7} {'':>7} "
+            f"{adj(r.ttf_interim_ms, r.rtt_ms):>10} "
+            f"{adj(r.ttf_final_ms, r.rtt_ms):>10} "
+            f"{adj(r.ttf_last_final_ms, r.rtt_ms):>10}"
         )
         if r.error:
             print(f"  ERROR: {r.error}")
