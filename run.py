@@ -571,7 +571,7 @@ def print_aggregate(results: list[Result], configs: list[tuple[str, Optional[str
             mean, p50, p95, _sd = _stats(vals)
             is_eou = (metric_name == "EOU")
             metric_style = S_EOU if is_eou else S_DIM
-            num_style = S_BOLD if is_eou else S_DIM
+            num_style = S_EOU if is_eou else S_DIM
             line = Text("  ")
             line.append(f"{metric_name:<11} ", style=metric_style)
             if svc:
