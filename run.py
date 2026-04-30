@@ -45,12 +45,30 @@ def audio_duration(path: str) -> float:
         return w.getnframes() / float(w.getframerate())
 
 
-async def stream_one(path: str, engine: str, model: Optional[str], api_key: str, realtime: bool) -> Result:
-    params = {
+async def stream_one(
+    path: str,
+    engine: str,
+    model: Optional[str],
+    api_key: str,
+    realtime: bool,
+    prewarm_ms: int = 0,
+    strip_wav_header: bool = False,
+) -> Result:
+    # Prewarm and header-strip both require raw PCM (linear16) because
+    # input_format=wav makes the server reject any non-RIFF leading bytes.
+    use_raw_pcm = strip_wav_header or prewarm_ms > 0
+    params: dict[str, str] = {
         "transcription_engine": engine,
-        "input_format": "wav",
         "interim_results": "true",
     }
+    if use_raw_pcm:
+        params["input_format"] = "linear16"
+        params["sample_rate"] = "16000"
+        # When in raw mode we always skip the WAV header, regardless of flag,
+        # because we declared raw PCM input.
+        strip_wav_header = True
+    else:
+        params["input_format"] = "wav"
     if model:
         params["transcription_model"] = model
     url = f"{WS_URL}?{urlencode(params)}"
@@ -90,8 +108,25 @@ async def stream_one(path: str, engine: str, model: Optional[str], api_key: str,
                 samples.sort()
                 rtt_ms = samples[len(samples) // 2]
 
+            # Optional prewarm: send N ms of silence so the upstream connection
+            # and Deepgram's VAD/model are warm before the real audio begins.
+            # The clock starts AFTER prewarm so prewarm doesn't poison metrics.
+            if prewarm_ms > 0:
+                silence_bytes = (prewarm_ms * 32)  # 32 bytes per ms at 16kHz mono s16
+                silence = b"\x00" * silence_bytes
+                # Send in chunks at realtime pace so VAD treats it like background
+                offset = 0
+                while offset < len(silence):
+                    await ws.send(silence[offset:offset + CHUNK_BYTES])
+                    offset += CHUNK_BYTES
+                    if realtime:
+                        await asyncio.sleep(chunk_seconds)
+
             async def send_audio() -> None:
                 with open(path, "rb") as f:
+                    if strip_wav_header:
+                        # Skip the 44-byte RIFF/fmt/data header; send raw PCM only
+                        f.read(44)
                     while chunk := f.read(CHUNK_BYTES):
                         await ws.send(chunk)
                         if realtime:
@@ -99,8 +134,7 @@ async def stream_one(path: str, engine: str, model: Optional[str], api_key: str,
                 # Tell Telnyx we're done — finalize remaining audio immediately
                 await ws.send(json.dumps({"type": "CloseStream"}))
 
-            # Reset clock now that connection + RTT probe are done — metrics
-            # below measure latency from "first audio byte sent" forward.
+            # Reset clock now — metrics below measure from "first real-audio byte sent"
             t_start = time.perf_counter()
             send_task = asyncio.create_task(send_audio())
 
@@ -213,7 +247,10 @@ async def main_async(args: argparse.Namespace) -> int:
 
     results: list[Result] = []
     for engine, model in runs:
-        results.append(await stream_one(args.audio, engine, model, api_key, args.realtime))
+        results.append(await stream_one(
+            args.audio, engine, model, api_key, args.realtime,
+            prewarm_ms=args.prewarm_ms, strip_wav_header=args.strip_wav_header,
+        ))
 
     print_summary(results)
 
@@ -229,6 +266,8 @@ def main() -> None:
     p.add_argument("--engine", help="single engine to test (Telnyx, Deepgram, Google, Azure). Default: nova-3+flux sweep")
     p.add_argument("--model", help="model name (Deepgram only: nova-2, nova-3, flux)")
     p.add_argument("--realtime", action="store_true", help="pace audio at 1x to simulate a live mic")
+    p.add_argument("--prewarm-ms", type=int, default=0, help="send N ms of silence before real audio to warm upstream (default: 0)")
+    p.add_argument("--strip-wav-header", action="store_true", help="skip the 44-byte WAV header so only raw PCM is sent")
     p.add_argument("--json", action="store_true", help="print results as JSON after summary")
     args = p.parse_args()
     sys.exit(asyncio.run(main_async(args)))
