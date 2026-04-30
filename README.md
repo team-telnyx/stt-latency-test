@@ -10,7 +10,7 @@ In the [Telnyx Portal](https://portal.telnyx.com), search for "API keys" once lo
 
 ## Quick start
 
-```bash
+```
 python -m venv .venv
 .venv/bin/pip install -r requirements.txt
 export TELNYX_API_KEY="your-key-here"
