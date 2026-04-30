@@ -266,7 +266,7 @@ def main() -> None:
     p.add_argument("--engine", help="single engine to test (Telnyx, Deepgram, Google, Azure). Default: nova-3+flux sweep")
     p.add_argument("--model", help="model name (Deepgram only: nova-2, nova-3, flux)")
     p.add_argument("--realtime", action="store_true", help="pace audio at 1x to simulate a live mic")
-    p.add_argument("--prewarm-ms", type=int, default=0, help="send N ms of silence before real audio to warm upstream (default: 0)")
+    p.add_argument("--prewarm-ms", type=int, default=1000, help="send N ms of silence before real audio to warm the upstream connection + Deepgram VAD/model. Default 1000ms reflects the warmed-state latency a real voice agent experiences. Set to 0 to measure cold-start.")
     p.add_argument("--strip-wav-header", action="store_true", help="skip the 44-byte WAV header so only raw PCM is sent")
     p.add_argument("--json", action="store_true", help="print results as JSON after summary")
     args = p.parse_args()
