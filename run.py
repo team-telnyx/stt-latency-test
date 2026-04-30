@@ -223,29 +223,36 @@ def clock_b_first_final_ms(r: Result) -> Optional[float]:
     return max(r.ttf_final_ms - r.ttf_interim_ms, 0)
 
 
-def _legend() -> None:
+def _legend(verbose: bool) -> None:
     print("Legend")
-    print("- first-int: time from first audio byte to first interim transcript. Should be near 0ms when warm.")
-    print("- EOU: end-of-utterance latency. Time between user stopping and final transcript locking. The metric users feel.")
-    print("- RTT: network round-trip time, shown for transparency. Already subtracted from first-int and EOU.")
-    print("- p50: median (typical experience).")
-    print("- p95: 95th percentile (what your slowest 5% see).")
+    print("- EOU: end-of-utterance latency — time from end-of-audio to final transcript locking. The metric users feel.")
+    print("- first-int: time-to-first-interim — time from first audio byte to first interim transcript (TTFT). Near 0ms when warm.")
+    print("- total: wall-clock for the run end-to-end.")
+    print("- first-final: time from stream open to the first FINAL transcript. Audio-content dependent. (verbose only)")
+    print("- last-final: time from stream open to the LAST final transcript. Bounded below by audio duration. (verbose only)")
+    print("- RTT: median WebSocket ping round-trip. Reported numbers are wall-clock (what your code measures end-to-end);")
+    print("  the (- RTT: …) column shows the service-only view with one RTT subtracted, useful for comparing engines")
+    print("  from datacenters with different network distances.")
+    print("- p50: median (typical experience). p95: what your slowest 5% see.")
+    if not verbose:
+        print()
+        print("Tip: pass --verbose to include first-final and last-final in the report.")
 
 
-def print_summary(results: list[Result]) -> None:
+def print_summary(results: list[Result], verbose: bool) -> None:
     print()
-    print("Results (RTT-subtracted)")
+    print("Results (wall-clock)")
     print()
     for r in results:
         label = r.engine + (f"/{r.model}" if r.model else "")
         eou = eou_ms(r)
-        eou_adj = adj(eou, r.rtt_ms)
-        int_adj = adj(r.ttf_interim_ms, r.rtt_ms)
-        print(f"  {label}: first-int {int_adj}, EOU {eou_adj}, RTT {fmt(r.rtt_ms)}")
+        print(f"  {label}: EOU {fmt(eou)} (- RTT: {adj(eou, r.rtt_ms)})  "
+              f"first-int {fmt(r.ttf_interim_ms)} (- RTT: {adj(r.ttf_interim_ms, r.rtt_ms)})  "
+              f"RTT {fmt(r.rtt_ms)}")
         if r.error:
             print(f"    ERROR: {r.error}")
     print()
-    _legend()
+    _legend(verbose)
     print()
 
 
@@ -292,16 +299,15 @@ async def main_async(args: argparse.Namespace) -> int:
                 model_label = model if model else (engine.lower())
                 marker = "fail" if r.error else "ok"
                 eou = eou_ms(r)
-                int_adj = adj(r.ttf_interim_ms, r.rtt_ms)
-                eou_adj = adj(eou, r.rtt_ms)
                 print(f"[{run_idx + 1}/{args.runs}] {model_label:<8} {marker}  "
-                      f"first-int {int_adj}  EOU {eou_adj}  RTT {fmt(r.rtt_ms)}",
+                      f"EOU {fmt(eou)}  first-int {fmt(r.ttf_interim_ms)}  "
+                      f"RTT {fmt(r.rtt_ms)}",
                       file=sys.stderr)
 
     if args.runs > 1:
-        print_aggregate(all_results, configs)
+        print_aggregate(all_results, configs, args.verbose)
     else:
-        print_summary(all_results)
+        print_summary(all_results, args.verbose)
 
     if args.json:
         print(json.dumps([asdict(r) for r in all_results], indent=2))
@@ -322,45 +328,56 @@ def _stats(values: list[float]) -> tuple[float, float, float, float]:
     return (mean, p50, p95, variance ** 0.5)
 
 
-def print_aggregate(results: list[Result], configs: list[tuple[str, Optional[str]]]) -> None:
-    iterations = len(results) // len(configs) if configs else 0
+def print_aggregate(results: list[Result], configs: list[tuple[str, Optional[str]]], verbose: bool) -> None:
     print()
     for engine, model in configs:
         rs = [r for r in results if r.engine == engine and r.model == model]
         ok = [r for r in rs if not r.error]
         label = model if model else engine.lower()
 
-        def collect(attr: str) -> list[float]:
+        def wall(attr: str) -> list[float]:
+            return [getattr(r, attr) for r in ok if getattr(r, attr) is not None]
+
+        def service(attr: str) -> list[float]:
             out: list[float] = []
             for r in ok:
                 v = getattr(r, attr)
-                rtt = r.rtt_ms
-                if v is not None and rtt is not None:
-                    out.append(max(v - rtt, 0))
+                if v is not None and r.rtt_ms is not None:
+                    out.append(max(v - r.rtt_ms, 0))
             return out
 
-        ttft_vals = collect("ttf_interim_ms")
-        eou_vals: list[float] = []
-        for r in ok:
-            v = eou_ms(r)
-            if v is not None and r.rtt_ms is not None:
-                eou_vals.append(max(v - r.rtt_ms, 0))
+        eou_wall = [v for v in (eou_ms(r) for r in ok) if v is not None]
+        eou_service = [
+            max(v - r.rtt_ms, 0)
+            for r, v in ((r, eou_ms(r)) for r in ok)
+            if v is not None and r.rtt_ms is not None
+        ]
         rtt_vals = [r.rtt_ms for r in ok if r.rtt_ms is not None]
 
-        print(f"Results — {label} ({len(ok)}/{len(rs)} iterations, RTT-subtracted)")
-        for metric_name, vals in [
-            ("first-int", ttft_vals),
-            ("EOU", eou_vals),
-            ("RTT", rtt_vals),
-        ]:
+        rows: list[tuple[str, list[float], Optional[list[float]]]] = [
+            ("EOU", eou_wall, eou_service),
+            ("first-int", wall("ttf_interim_ms"), service("ttf_interim_ms")),
+            ("total", [r.total_ms for r in ok], service("total_ms")),
+        ]
+        if verbose:
+            rows.append(("first-final", wall("ttf_final_ms"), service("ttf_final_ms")))
+            rows.append(("last-final", wall("ttf_last_final_ms"), service("ttf_last_final_ms")))
+        rows.append(("RTT", rtt_vals, None))
+
+        print(f"Results — {label} ({len(ok)}/{len(rs)} iterations, wall-clock)")
+        for metric_name, vals, svc in rows:
             if not vals:
-                print(f"  {metric_name:<10}  no data")
+                print(f"  {metric_name:<11} no data")
                 continue
             mean, p50, p95, _sd = _stats(vals)
-            print(f"  {metric_name:<10}  mean {mean:.0f}ms, p50 {p50:.0f}ms, p95 {p95:.0f}ms")
+            line = f"  {metric_name:<11} mean {mean:>5.0f}ms  p50 {p50:>5.0f}ms  p95 {p95:>5.0f}ms"
+            if svc:
+                s_mean, s_p50, s_p95, _ = _stats(svc)
+                line += f"   (- RTT: {s_mean:.0f} / {s_p50:.0f} / {s_p95:.0f})"
+            print(line)
         print()
 
-    _legend()
+    _legend(verbose)
     print()
 
 
@@ -373,6 +390,7 @@ def main() -> None:
     p.add_argument("--prewarm-ms", type=int, default=1000, help="send N ms of silence before real audio to warm the upstream connection + Deepgram VAD/model. Default 1000ms reflects the warmed-state latency a real voice agent experiences. Set to 0 to measure cold-start.")
     p.add_argument("--strip-wav-header", action="store_true", help="skip the 44-byte WAV header so only raw PCM is sent")
     p.add_argument("--runs", type=int, default=1, help="number of times to run each (engine, model) — reports mean/p50/p95/stddev (default: 1)")
+    p.add_argument("--verbose", action="store_true", help="include first-final and last-final in the report (off by default)")
     p.add_argument("--json", action="store_true", help="print results as JSON after summary")
     args = p.parse_args()
     sys.exit(asyncio.run(main_async(args)))
