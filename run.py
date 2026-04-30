@@ -354,23 +354,6 @@ def _legend(verbose: bool) -> None:
         _console.print(Text("  Tip: pass --verbose to include first-final and last-final.", style=S_DIM))
 
 
-def print_summary(results: list[Result], verbose: bool) -> None:
-    print()
-    print("Results (service-only | wall-clock)")
-    print()
-    for r in results:
-        label = r.engine + (f"/{r.model}" if r.model else "")
-        eou = eou_ms(r)
-        print(f"  {label}: EOU {adj(eou, r.rtt_ms)} | {fmt(eou)}  "
-              f"first-int {adj(r.ttf_interim_ms, r.rtt_ms)} | {fmt(r.ttf_interim_ms)}  "
-              f"RTT {fmt(r.rtt_ms)}")
-        if r.error:
-            print(f"    ERROR: {r.error}")
-    print()
-    _legend(verbose)
-    print()
-
-
 async def main_async(args: argparse.Namespace) -> int:
     api_key = os.environ.get("TELNYX_API_KEY")
     if not api_key:
@@ -386,42 +369,41 @@ async def main_async(args: argparse.Namespace) -> int:
     else:
         configs = [("Deepgram", "nova-3"), ("Deepgram", "flux")]
 
-    if args.runs > 1:
-        duration = audio_duration(args.audio)
-        _h1("TELNYX DEEPGRAM STT LATENCY BENCHMARK")
-        _console.print()
-        _section("TEST CONFIGURATION")
+    duration = audio_duration(args.audio)
+    _h1("TELNYX DEEPGRAM STT LATENCY BENCHMARK")
+    _console.print()
+    _section("TEST CONFIGURATION")
 
-        def _cfg(label: str, value: str) -> None:
-            t = Text("  ")
-            t.append(label, style=S_DIM)
-            t.append(value)
-            _console.print(t)
+    def _cfg(label: str, value: str) -> None:
+        t = Text("  ")
+        t.append(label, style=S_DIM)
+        t.append(value)
+        _console.print(t)
 
-        _cfg("Audio:      ", f"{args.audio} ({duration:.2f} seconds)")
-        if args.spoken:
-            _cfg("Says:       ", f"\"{args.spoken}\"")
-        _cfg("Iterations: ", f"{args.runs} per model")
-        if args.prewarm_ms > 0:
-            _cfg("Pre-warm:   ", f"{args.prewarm_ms}ms of silence to warm the connection")
-        else:
-            _cfg("Pre-warm:   ", "none (cold start)")
-        _cfg("Pacing:     ", "realtime (1x) to simulate a live mic")
-        _console.print()
-        _preamble()
-        _legend(args.verbose)
-        _console.print()
-        _section("RUNNING")
-        _console.print()
-        for line in [
-            "  Each iteration runs both models back-to-back: nova-3, then flux.",
-            "  We do this so network jitter affects both equally — if your Wi-Fi",
-            "  blips, both models see it. Iteration 1 streams the live interim/",
-            "  final transcripts so you can see what the engine is hearing.",
-            "  Iterations 2+ show metrics only.",
-        ]:
-            _console.print(Text(line, style=S_PARAGRAPH))
-        _console.print()
+    _cfg("Audio:      ", f"{args.audio} ({duration:.2f} seconds)")
+    if args.spoken:
+        _cfg("Says:       ", f"\"{args.spoken}\"")
+    _cfg("Iterations: ", f"{args.runs} per model")
+    if args.prewarm_ms > 0:
+        _cfg("Pre-warm:   ", f"{args.prewarm_ms}ms of silence to warm the connection")
+    else:
+        _cfg("Pre-warm:   ", "none (cold start)")
+    _cfg("Pacing:     ", "realtime (1x) to simulate a live mic")
+    _console.print()
+    _preamble()
+    _legend(args.verbose)
+    _console.print()
+    _section("RUNNING")
+    _console.print()
+    for line in [
+        "  Each iteration runs both models back-to-back: nova-3, then flux.",
+        "  We do this so network jitter affects both equally — if your Wi-Fi",
+        "  blips, both models see it. Iteration 1 streams the live interim/",
+        "  final transcripts so you can see what the engine is hearing.",
+        "  Iterations 2+ show metrics only.",
+    ]:
+        _console.print(Text(line, style=S_PARAGRAPH))
+    _console.print()
 
     all_results: list[Result] = []
     for run_idx in range(args.runs):
@@ -430,7 +412,7 @@ async def main_async(args: argparse.Namespace) -> int:
             model_label = model if model else (engine.lower())
             max_idx_len = len(f"[{args.runs}/{args.runs}]")
             idx_str = f"[{run_idx + 1}/{args.runs}]".rjust(max_idx_len)
-            demo = run_idx == 0 and args.runs > 1
+            demo = run_idx == 0
 
             if demo:
                 t = Text("  ")
@@ -456,56 +438,51 @@ async def main_async(args: argparse.Namespace) -> int:
             )
             all_results.append(r)
 
-            if args.runs > 1:
-                eou = eou_ms(r)
-                eou_str = f"{eou:.0f}ms" if eou is not None else "—"
-                fi_str = f"{r.ttf_interim_ms:.0f}ms" if r.ttf_interim_ms is not None else "—"
-                if demo:
-                    line = Text("    ")
-                    line.append("metrics:  ", style=S_DIM)
-                    line.append("EOU ", style=S_EOU)
-                    line.append(eou_str, style=S_EOU)
-                    line.append("   first-int ", style=S_DIM)
-                    line.append(fi_str, style=S_DIM)
-                    _console.print(line)
-                    _console.print()
+            eou = eou_ms(r)
+            eou_str = f"{eou:.0f}ms" if eou is not None else "—"
+            fi_str = f"{r.ttf_interim_ms:.0f}ms" if r.ttf_interim_ms is not None else "—"
+            if demo:
+                line = Text("    ")
+                line.append("metrics:  ", style=S_DIM)
+                line.append("EOU ", style=S_EOU)
+                line.append(eou_str, style=S_EOU)
+                line.append("   first-int ", style=S_DIM)
+                line.append(fi_str, style=S_DIM)
+                _console.print(line)
+                _console.print()
+            else:
+                eou_str_pad = f"{eou:>5.0f}ms" if eou is not None else "    —  "
+                fi_str_pad = f"{r.ttf_interim_ms:>5.0f}ms" if r.ttf_interim_ms is not None else "    —  "
+                line = Text("  ")
+                line.append(idx_str + " ", style=S_DIM)
+                line.append(f"{model_label:<8}", style=S_MODEL_ITER)
+                if not r.error:
+                    line.append("   ✓    ", style=S_OK)
                 else:
-                    eou_str_pad = f"{eou:>5.0f}ms" if eou is not None else "    —  "
-                    fi_str_pad = f"{r.ttf_interim_ms:>5.0f}ms" if r.ttf_interim_ms is not None else "    —  "
-                    line = Text("  ")
-                    line.append(idx_str + " ", style=S_DIM)
-                    line.append(f"{model_label:<8}", style=S_MODEL_ITER)
-                    if not r.error:
-                        line.append("   ✓    ", style=S_OK)
-                    else:
-                        line.append("   ✗    ", style=S_FAIL)
-                    line.append("EOU ", style=S_EOU)
-                    line.append(eou_str_pad, style=S_EOU)
-                    line.append("   first-int ", style=S_DIM)
-                    line.append(fi_str_pad, style=S_DIM)
-                    _console.print(line)
+                    line.append("   ✗    ", style=S_FAIL)
+                line.append("EOU ", style=S_EOU)
+                line.append(eou_str_pad, style=S_EOU)
+                line.append("   first-int ", style=S_DIM)
+                line.append(fi_str_pad, style=S_DIM)
+                _console.print(line)
 
-    if args.runs > 1:
-        _console.print()
-        _console.print(Text("  Transcripts captured:", style=S_DIM))
-        for engine, model in configs:
-            label = model if model else engine.lower()
-            rs = [r for r in all_results if r.engine == engine and r.model == model and not r.error]
-            transcripts = [r.transcript.strip() for r in rs if r.transcript.strip()]
-            if not transcripts:
-                _console.print(Text(f"    {label:<10} (no transcript captured)", style=S_DIM))
-                continue
-            unique = set(transcripts)
-            canonical = max(unique, key=lambda t: transcripts.count(t))
-            agree = transcripts.count(canonical)
-            _console.print(Text(f"    {label:<10} {agree}/{len(rs)} agreed: \"{canonical}\""))
-            if len(unique) > 1:
-                _console.print(Text(f"               note: {len(unique) - 1} iteration(s) returned different text — see --json", style=S_DIM))
+    _console.print()
+    _console.print(Text("  Transcripts captured:", style=S_DIM))
+    for engine, model in configs:
+        label = model if model else engine.lower()
+        rs = [r for r in all_results if r.engine == engine and r.model == model and not r.error]
+        transcripts = [r.transcript.strip() for r in rs if r.transcript.strip()]
+        if not transcripts:
+            _console.print(Text(f"    {label:<10} (no transcript captured)", style=S_DIM))
+            continue
+        unique = set(transcripts)
+        canonical = max(unique, key=lambda t: transcripts.count(t))
+        agree = transcripts.count(canonical)
+        _console.print(Text(f"    {label:<10} {agree}/{len(rs)} agreed: \"{canonical}\""))
+        if len(unique) > 1:
+            _console.print(Text(f"               note: {len(unique) - 1} iteration(s) returned different text — see --json", style=S_DIM))
 
-    if args.runs > 1:
-        print_aggregate(all_results, configs, args.verbose)
-    else:
-        print_summary(all_results, args.verbose)
+    print_aggregate(all_results, configs, args.verbose)
 
     if args.json:
         print(json.dumps([asdict(r) for r in all_results], indent=2))
