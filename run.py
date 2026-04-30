@@ -428,8 +428,8 @@ async def main_async(args: argparse.Namespace) -> int:
         _CURRENT_ITER["idx"] = run_idx + 1
         for engine, model in configs:
             model_label = model if model else (engine.lower())
-            rw = len(str(args.runs))
-            idx_str = f"[{run_idx + 1:>{rw}}/{args.runs}]"
+            max_idx_len = len(f"[{args.runs}/{args.runs}]")
+            idx_str = f"[{run_idx + 1}/{args.runs}]".rjust(max_idx_len)
             demo = run_idx == 0 and args.runs > 1
 
             if demo:
