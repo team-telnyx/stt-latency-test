@@ -253,10 +253,8 @@ _CURRENT_ITER: dict = {"idx": 0}
 # Telnyx brand green from the SVG mark.
 TELNYX_GREEN = "#00E3AA"
 
-S_H1_RULE = TELNYX_GREEN
-S_H1_SECTION = f"bold {TELNYX_GREEN}"
-S_RULE = "bright_white"
-S_SECTION = "bold bright_white"
+S_RULE = TELNYX_GREEN
+S_SECTION = f"bold {TELNYX_GREEN}"
 S_DIM = "dim"
 S_BOLD = "bold"
 S_EOU = "bold yellow"
@@ -272,9 +270,9 @@ def _h1(title: str) -> None:
     bar = "═" * H1_RULE_LEN
     pad = (H1_RULE_LEN - 6 - len(title)) // 2
     middle = "═══" + " " * pad + title + " " * (H1_RULE_LEN - 6 - pad - len(title)) + "═══"
-    _console.print(Text(bar, style=S_H1_RULE))
-    _console.print(Text(middle, style=S_H1_SECTION))
-    _console.print(Text(bar, style=S_H1_RULE))
+    _console.print(Text(bar, style=S_RULE))
+    _console.print(Text(middle, style=S_SECTION))
+    _console.print(Text(bar, style=S_RULE))
 
 
 def _section(title: str) -> None:
