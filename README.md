@@ -21,7 +21,9 @@ The default run benchmarks Deepgram **nova-3** and **flux** side-by-side. 10 ite
 
 ## What you'll see
 
-After the test config and a quick read of the educational header, the script streams iteration 1 live so you can see what the engine is hearing — then iterations 2+ show tight one-line metrics. Example tail:
+After the test config and a quick read of the educational header, the script streams iteration 1 live so you can see what the engine is hearing — then iterations 2+ show tight one-line metrics.
+
+**Example:**
 
 ```
   [10/10] nova-3   ok    EOU   408ms   first-int    47ms
