@@ -389,7 +389,7 @@ async def main_async(args: argparse.Namespace) -> int:
 
     if args.runs > 1:
         duration = audio_duration(args.audio)
-        _h1("DEEPGRAM STT LATENCY BENCHMARK")
+        _h1("TELNYX DEEPGRAM STT LATENCY BENCHMARK")
         _console.print()
         _section("TEST CONFIGURATION")
 
