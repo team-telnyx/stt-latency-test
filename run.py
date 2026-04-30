@@ -257,10 +257,10 @@ S_RULE = "bright_white"
 S_SECTION = "bold bright_white"
 S_DIM = "dim"
 S_BOLD = "bold"
-S_EOU = "bold yellow"
-S_FIRST_INT = f"bold {TELNYX_GREEN}"
-S_MODEL_RES = f"bold {TELNYX_GREEN}"
-S_MODEL_ITER = TELNYX_GREEN
+S_EOU = f"bold {TELNYX_GREEN}"
+S_FIRST_INT = "bold cyan"
+S_MODEL_RES = "bold cyan"
+S_MODEL_ITER = "cyan"
 S_OK = "green"
 S_FAIL = "bold red"
 
@@ -477,9 +477,9 @@ async def main_async(args: argparse.Namespace) -> int:
                     line.append(idx_str + " ", style=S_DIM)
                     line.append(f"{model_label:<8}", style=S_MODEL_ITER)
                     if not r.error:
-                        line.append("   ok    ", style=S_OK)
+                        line.append("   ✓    ", style=S_OK)
                     else:
-                        line.append("   fail  ", style=S_FAIL)
+                        line.append("   ✗    ", style=S_FAIL)
                     line.append("EOU ", style=S_EOU)
                     line.append(eou_str_pad, style=S_EOU)
                     line.append("   first-int ", style=S_DIM)
