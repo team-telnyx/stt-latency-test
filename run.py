@@ -352,10 +352,7 @@ async def main_async(args: argparse.Namespace) -> int:
             print(f"  Pre-warm:   {args.prewarm_ms}ms of silence to warm the connection")
         else:
             print("  Pre-warm:   none (cold start)")
-        if args.realtime:
-            print("  Pacing:     realtime (1x) to simulate a live mic")
-        else:
-            print("  Pacing:     as fast as possible (batch mode)")
+        print("  Pacing:     realtime (1x) to simulate a live mic")
         print()
         _preamble()
         _legend(args.verbose)
@@ -382,7 +379,7 @@ async def main_async(args: argparse.Namespace) -> int:
                 print(f"  {idx_str} {model_label:<8} running...", file=sys.stderr)
 
             r = await stream_one(
-                args.audio, engine, model, api_key, args.realtime,
+                args.audio, engine, model, api_key, True,
                 prewarm_ms=args.prewarm_ms, strip_wav_header=args.strip_wav_header,
                 show_stream=demo,
             )
@@ -511,7 +508,6 @@ def main() -> None:
     p.add_argument("--spoken", default="Hello, my name is Jon and I'm testing speech recognition.", help="text spoken in the audio file, displayed in the test configuration")
     p.add_argument("--engine", help="single engine to test (Telnyx, Deepgram, Google, Azure). Default: nova-3+flux sweep")
     p.add_argument("--model", help="model name (Deepgram only: nova-2, nova-3, flux)")
-    p.add_argument("--realtime", action="store_true", help="pace audio at 1x to simulate a live mic")
     p.add_argument("--prewarm-ms", type=int, default=1000, help="send N ms of silence before real audio to warm the upstream connection + Deepgram VAD/model. Default 1000ms reflects the warmed-state latency a real voice agent experiences. Set to 0 to measure cold-start.")
     p.add_argument("--strip-wav-header", action="store_true", help="skip the 44-byte WAV header so only raw PCM is sent")
     p.add_argument("--runs", type=int, default=1, help="number of times to run each (engine, model) — reports mean/p50/p95/stddev (default: 1)")
