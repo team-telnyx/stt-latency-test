@@ -582,6 +582,11 @@ def print_aggregate(results: list[Result], configs: list[tuple[str, Optional[str
         header.append("  wall-clock", style=S_DIM)
         _console.print(header)
 
+        underline = Text(f"  {'':<11} ")
+        underline.append(f"{'-' * 20:<38}", style=S_DIM)
+        underline.append("  " + "-" * 10, style=S_DIM)
+        _console.print(underline)
+
         for metric_name, vals, svc in rows:
             if not vals:
                 _console.print(Text(f"  {metric_name:<11} no data", style=S_DIM))
