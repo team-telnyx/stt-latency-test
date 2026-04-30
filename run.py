@@ -53,6 +53,7 @@ async def stream_one(
     realtime: bool,
     prewarm_ms: int = 0,
     strip_wav_header: bool = False,
+    show_stream: bool = False,
 ) -> Result:
     # Prewarm and header-strip both require raw PCM (linear16) because
     # input_format=wav makes the server reject any non-RIFF leading bytes.
@@ -159,14 +160,17 @@ async def stream_one(
                 if "transcript" in msg:
                     now_ms = (time.perf_counter() - t_start) * 1000
                     is_final = bool(msg.get("is_final"))
+                    text = msg.get("transcript", "").strip()
                     if not is_final and ttf_interim is None:
                         ttf_interim = now_ms
+                    if show_stream and text:
+                        label = "final:   " if is_final else "interim: "
+                        print(f"    {label} {text}", file=sys.stderr)
                     if is_final:
                         finals_count += 1
                         if ttf_first_final is None:
                             ttf_first_final = now_ms
                         ttf_last_final = now_ms
-                        text = msg.get("transcript", "").strip()
                         if text:
                             transcript_parts.append(text)
                         if send_task.done():
@@ -223,31 +227,95 @@ def clock_b_first_final_ms(r: Result) -> Optional[float]:
     return max(r.ttf_final_ms - r.ttf_interim_ms, 0)
 
 
+RULE = "═" * 60
+H1_RULE_LEN = 60
+
+_CURRENT_ITER: dict = {"idx": 0}
+
+
+def _h1(title: str) -> None:
+    bar = "═" * H1_RULE_LEN
+    inner = " " * H1_RULE_LEN
+    pad = (H1_RULE_LEN - 6 - len(title)) // 2
+    middle = "═══" + " " * pad + title + " " * (H1_RULE_LEN - 6 - pad - len(title)) + "═══"
+    print(bar)
+    print(middle)
+    print(bar)
+
+
+def _section(title: str) -> None:
+    print(RULE)
+    print(f"  {title}")
+    print(RULE)
+
+
+def _preamble() -> None:
+    _section("WHAT YOU'RE ABOUT TO SEE — READ THIS FIRST")
+    print()
+    print("▸ The metric that matters")
+    print()
+    print("  Voice agents feel slow because of ONE number: EOU latency — the")
+    print("  dead air between when the user stops talking and when the")
+    print("  transcript locks. That's the only latency your users actually feel.")
+    print()
+    print("▸ The marketing number")
+    print()
+    print("  TTFT (first-int) is how fast the first word appears as you talk.")
+    print("  It tells you the pipe is alive but doesn't predict conversation")
+    print("  feel. We report it but don't optimize for it.")
+    print()
+    print("▸ The two columns")
+    print()
+    print("  wall-clock     The raw measurement. Stopwatch from when audio starts")
+    print("                 flowing until the transcript locks. Includes your")
+    print("                 network round-trip.")
+    print()
+    print("  service-only   An estimate of the engine alone. We approximate it by")
+    print("                 subtracting one measured RTT from the wall-clock number.")
+    print("                 It's not perfect — a more rigorous test would inject")
+    print("                 timestamps into the audio sample itself — but it's close")
+    print("                 enough to compare engines fairly across regions.")
+    print()
+
+
 def _legend(verbose: bool) -> None:
-    print("Legend")
-    print("- EOU: end-of-utterance latency — time from end-of-audio to final transcript locking. The metric users feel.")
-    print("- first-int: time-to-first-interim — time from first audio byte to first interim transcript (TTFT). Near 0ms when warm.")
-    print("- total: wall-clock for the run end-to-end.")
-    print("- first-final: time from stream open to the first FINAL transcript. Audio-content dependent. (verbose only)")
-    print("- last-final: time from stream open to the LAST final transcript. Bounded below by audio duration. (verbose only)")
-    print("- RTT: median WebSocket ping round-trip. Reported numbers are wall-clock (what your code measures end-to-end);")
-    print("  the (- RTT: …) column shows the service-only view with one RTT subtracted, useful for comparing engines")
-    print("  from datacenters with different network distances.")
-    print("- p50: median (typical experience). p95: what your slowest 5% see.")
+    _section("LEGEND")
+    print("  EOU (\"End of Utterance\")")
+    print("              The dead air after the user stops talking.")
+    print("              This is the number that decides how fast your bot replies.")
+    print()
+    print("  first-int (\"first interim\", a.k.a. TTFT or Time To First Token)")
+    print("              The first guess the engine ships after audio starts.")
+    print("              Comes back fast. Don't optimize for it.")
+    print()
+    print("  total       End-to-end duration of the run.")
+    print("              Sanity check, not a comparison metric.")
+    print()
+    if verbose:
+        print("  first-final time from audio-started → first final transcript")
+        print("  last-final  time from audio-started → last final transcript")
+        print()
+    print("  RTT (\"Round-Trip Time\")")
+    print("              Network latency between your machine and Telnyx.")
+    print("              We subtract one RTT from wall-clock to get service-only.")
+    print()
+    print("  p50 / p95   The median (p50) and the tail (p95). Half your runs")
+    print("              beat p50; 5% are slower than p95. p50 tells you what")
+    print("              normal feels like; p95 tells you how bad the bad days get.")
     if not verbose:
         print()
-        print("Tip: pass --verbose to include first-final and last-final in the report.")
+        print("  Tip: pass --verbose to include first-final and last-final.")
 
 
 def print_summary(results: list[Result], verbose: bool) -> None:
     print()
-    print("Results (wall-clock)")
+    print("Results (service-only | wall-clock)")
     print()
     for r in results:
         label = r.engine + (f"/{r.model}" if r.model else "")
         eou = eou_ms(r)
-        print(f"  {label}: EOU {fmt(eou)} (- RTT: {adj(eou, r.rtt_ms)})  "
-              f"first-int {fmt(r.ttf_interim_ms)} (- RTT: {adj(r.ttf_interim_ms, r.rtt_ms)})  "
+        print(f"  {label}: EOU {adj(eou, r.rtt_ms)} | {fmt(eou)}  "
+              f"first-int {adj(r.ttf_interim_ms, r.rtt_ms)} | {fmt(r.ttf_interim_ms)}  "
               f"RTT {fmt(r.rtt_ms)}")
         if r.error:
             print(f"    ERROR: {r.error}")
@@ -273,36 +341,88 @@ async def main_async(args: argparse.Namespace) -> int:
 
     if args.runs > 1:
         duration = audio_duration(args.audio)
-        print("Deepgram STT Latency Benchmark")
-        print("==============================")
-        print(f"Audio:       {args.audio} ({duration:.2f} seconds in length)")
-        print(f"Iterations:  {args.runs} per model")
+        _h1("DEEPGRAM STT LATENCY BENCHMARK")
+        print()
+        _section("TEST CONFIGURATION")
+        print(f"  Audio:      {args.audio} ({duration:.2f} seconds)")
+        if args.spoken:
+            print(f"  Says:       \"{args.spoken}\"")
+        print(f"  Iterations: {args.runs} per model")
         if args.prewarm_ms > 0:
-            print(f"Pre-warm:    sending {args.prewarm_ms}ms of silence to warm the connection before audio")
+            print(f"  Pre-warm:   {args.prewarm_ms}ms of silence to warm the connection")
         else:
-            print("Pre-warm:    none (cold start)")
+            print("  Pre-warm:   none (cold start)")
         if args.realtime:
-            print("Pacing:      streaming audio at realtime (1x) to simulate a live mic")
+            print("  Pacing:     realtime (1x) to simulate a live mic")
         else:
-            print("Pacing:      streaming audio as fast as possible (batch mode)")
+            print("  Pacing:     as fast as possible (batch mode)")
+        print()
+        _preamble()
+        _legend(args.verbose)
+        print()
+        try:
+            input("  Press Enter to start the benchmark... ")
+        except EOFError:
+            pass
+        print()
+        _section("RUNNING")
+        print()
+        print("  Each iteration runs both models back-to-back: nova-3, then flux.")
+        print("  We do this so network jitter affects both equally — if your Wi-Fi")
+        print("  blips, both models see it. Iteration 1 streams the live interim/")
+        print("  final transcripts so you can see what the engine is hearing.")
+        print("  Iterations 2+ show metrics only.")
         print()
 
     all_results: list[Result] = []
     for run_idx in range(args.runs):
+        _CURRENT_ITER["idx"] = run_idx + 1
         for engine, model in configs:
+            model_label = model if model else (engine.lower())
+            rw = len(str(args.runs))
+            idx_str = f"[{run_idx + 1:>{rw}}/{args.runs}]"
+            demo = run_idx == 0 and args.runs > 1
+
+            if demo:
+                print(f"  {idx_str} {model_label:<8} running...", file=sys.stderr)
+
             r = await stream_one(
                 args.audio, engine, model, api_key, args.realtime,
                 prewarm_ms=args.prewarm_ms, strip_wav_header=args.strip_wav_header,
+                show_stream=demo,
             )
             all_results.append(r)
+
             if args.runs > 1:
-                model_label = model if model else (engine.lower())
-                marker = "fail" if r.error else "ok"
+                marker = "ok  " if not r.error else "fail"
                 eou = eou_ms(r)
-                print(f"[{run_idx + 1}/{args.runs}] {model_label:<8} {marker}  "
-                      f"EOU {fmt(eou)}  first-int {fmt(r.ttf_interim_ms)}  "
-                      f"RTT {fmt(r.rtt_ms)}",
-                      file=sys.stderr)
+                eou_str = f"{eou:>5.0f}ms" if eou is not None else "    —  "
+                fi_str = f"{r.ttf_interim_ms:>5.0f}ms" if r.ttf_interim_ms is not None else "    —  "
+                if demo:
+                    print(f"    metrics:  EOU {eou_str.strip()}   first-int {fi_str.strip()}",
+                          file=sys.stderr)
+                    print(file=sys.stderr)
+                else:
+                    print(f"  {idx_str} {model_label:<8} {marker}  "
+                          f"EOU {eou_str}   first-int {fi_str}",
+                          file=sys.stderr)
+
+    if args.runs > 1:
+        print()
+        print("  Transcripts captured:")
+        for engine, model in configs:
+            label = model if model else engine.lower()
+            rs = [r for r in all_results if r.engine == engine and r.model == model and not r.error]
+            transcripts = [r.transcript.strip() for r in rs if r.transcript.strip()]
+            if not transcripts:
+                print(f"    {label:<10} (no transcript captured)")
+                continue
+            unique = set(transcripts)
+            canonical = max(unique, key=lambda t: transcripts.count(t))
+            agree = transcripts.count(canonical)
+            print(f"    {label:<10} {agree}/{len(rs)} agreed: \"{canonical}\"")
+            if len(unique) > 1:
+                print(f"               note: {len(unique) - 1} iteration(s) returned different text — see --json")
 
     if args.runs > 1:
         print_aggregate(all_results, configs, args.verbose)
@@ -329,6 +449,12 @@ def _stats(values: list[float]) -> tuple[float, float, float, float]:
 
 
 def print_aggregate(results: list[Result], configs: list[tuple[str, Optional[str]]], verbose: bool) -> None:
+    print()
+    _section("RESULTS")
+    print()
+    print("  Both columns shown side-by-side keeps us honest. Wall-clock is the")
+    print("  full number including your network — service-only is what we estimate")
+    print("  the engine alone is doing. You see both, you do the math.")
     print()
     for engine, model in configs:
         rs = [r for r in results if r.engine == engine and r.model == model]
@@ -364,26 +490,30 @@ def print_aggregate(results: list[Result], configs: list[tuple[str, Optional[str
             rows.append(("last-final", wall("ttf_last_final_ms"), service("ttf_last_final_ms")))
         rows.append(("RTT", rtt_vals, None))
 
-        print(f"Results — {label} ({len(ok)}/{len(rs)} iterations, wall-clock)")
+        print(f"  {label}")
+        print(f"  ({len(ok)}/{len(rs)} iterations)")
+        print()
+        print(f"  {'':<11} {'service-only (- RTT)':<38}  wall-clock")
         for metric_name, vals, svc in rows:
             if not vals:
                 print(f"  {metric_name:<11} no data")
                 continue
             mean, p50, p95, _sd = _stats(vals)
-            line = f"  {metric_name:<11} mean {mean:>5.0f}ms  p50 {p50:>5.0f}ms  p95 {p95:>5.0f}ms"
+            wall_col = f"mean {mean:>4.0f}ms  p50 {p50:>4.0f}ms  p95 {p95:>4.0f}ms"
             if svc:
                 s_mean, s_p50, s_p95, _ = _stats(svc)
-                line += f"   (- RTT: {s_mean:.0f} / {s_p50:.0f} / {s_p95:.0f})"
+                svc_col = f"mean {s_mean:>4.0f}ms  p50 {s_p50:>4.0f}ms  p95 {s_p95:>4.0f}ms"
+                line = f"  {metric_name:<11} {svc_col:<38}  {wall_col}"
+            else:
+                line = f"  {metric_name:<11} {'':<38}  {wall_col}"
             print(line)
         print()
-
-    _legend(verbose)
-    print()
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Telnyx standalone STT latency test")
     p.add_argument("--audio", default="samples/sample.wav", help="path to WAV file (default: samples/sample.wav)")
+    p.add_argument("--spoken", default="Hello, my name is Jon and I'm testing speech recognition.", help="text spoken in the audio file, displayed in the test configuration")
     p.add_argument("--engine", help="single engine to test (Telnyx, Deepgram, Google, Azure). Default: nova-3+flux sweep")
     p.add_argument("--model", help="model name (Deepgram only: nova-2, nova-3, flux)")
     p.add_argument("--realtime", action="store_true", help="pace audio at 1x to simulate a live mic")
@@ -393,7 +523,18 @@ def main() -> None:
     p.add_argument("--verbose", action="store_true", help="include first-final and last-final in the report (off by default)")
     p.add_argument("--json", action="store_true", help="print results as JSON after summary")
     args = p.parse_args()
-    sys.exit(asyncio.run(main_async(args)))
+    try:
+        sys.exit(asyncio.run(main_async(args)))
+    except KeyboardInterrupt:
+        idx = _CURRENT_ITER["idx"]
+        if idx and args.runs > 1:
+            print(file=sys.stderr)
+            print(f"Interrupted at iteration {idx}/{args.runs}. Partial results "
+                  "discarded — re-run to get a full benchmark.", file=sys.stderr)
+        else:
+            print(file=sys.stderr)
+            print("Interrupted.", file=sys.stderr)
+        sys.exit(130)
 
 
 if __name__ == "__main__":
