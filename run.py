@@ -15,10 +15,16 @@ import sys
 import time
 import wave
 from dataclasses import asdict, dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 from urllib.parse import urlencode
 
 import websockets
+
+from rich.console import Console, Group
+from rich.layout import Layout
+from rich.live import Live
+from rich.panel import Panel
+from rich.text import Text
 
 WS_URL = "wss://api.telnyx.com/v2/speech-to-text/transcription"
 CHUNK_BYTES = 2048
@@ -54,6 +60,7 @@ async def stream_one(
     prewarm_ms: int = 0,
     strip_wav_header: bool = False,
     show_stream: bool = False,
+    on_stream: Optional[Callable[[bool, str], None]] = None,
 ) -> Result:
     # Prewarm and header-strip both require raw PCM (linear16) because
     # input_format=wav makes the server reject any non-RIFF leading bytes.
@@ -163,9 +170,12 @@ async def stream_one(
                     text = msg.get("transcript", "").strip()
                     if not is_final and ttf_interim is None:
                         ttf_interim = now_ms
-                    if show_stream and text:
-                        label = "final:   " if is_final else "interim: "
-                        print(f"    {label} {text}", file=sys.stderr)
+                    if text:
+                        if on_stream is not None:
+                            on_stream(is_final, text)
+                        elif show_stream:
+                            label = "final:   " if is_final else "interim: "
+                            print(f"    {label} {text}", file=sys.stderr)
                     if is_final:
                         finals_count += 1
                         if ttf_first_final is None:
@@ -339,6 +349,15 @@ async def main_async(args: argparse.Namespace) -> int:
     else:
         configs = [("Deepgram", "nova-3"), ("Deepgram", "flux")]
 
+    use_rich = sys.stdout.isatty() and not args.no_rich
+
+    if use_rich:
+        console = Console()
+        all_results, exit_code = await _run_with_rich(args, configs, api_key, console)
+        if args.json:
+            print(json.dumps([asdict(r) for r in all_results], indent=2))
+        return exit_code
+
     if args.runs > 1:
         duration = audio_duration(args.audio)
         _h1("DEEPGRAM STT LATENCY BENCHMARK")
@@ -505,6 +524,378 @@ def print_aggregate(results: list[Result], configs: list[tuple[str, Optional[str
         print()
 
 
+# ─────────────────────────────────────────────────────────────────
+# Rich (TTY) UI
+# ─────────────────────────────────────────────────────────────────
+
+# Color through-line for the spec:
+#   bold yellow = EOU (the metric that matters)
+#   bold cyan   = first-int / TTFT and model names in result tables
+#   cyan        = model names in iteration scroll
+#   dim         = secondary metrics, prefixes, explainer paragraphs
+#   bold        = numbers that matter
+#   green       = ok
+#   red         = fail / errors
+
+S_RULE = "bright_white"
+S_SECTION = "bold bright_white"
+S_DIM = "dim"
+S_BOLD = "bold"
+S_EOU = "bold yellow"
+S_FIRST_INT = "bold cyan"
+S_MODEL_RES = "bold cyan"
+S_MODEL_ITER = "cyan"
+S_OK = "green"
+S_FAIL = "bold red"
+
+
+def _r_rule() -> Text:
+    return Text(RULE, style=S_RULE)
+
+
+def _r_section(title: str) -> Group:
+    return Group(_r_rule(), Text(f"  {title}", style=S_SECTION), _r_rule())
+
+
+def _r_h1(title: str) -> Group:
+    bar = "═" * H1_RULE_LEN
+    pad = (H1_RULE_LEN - 6 - len(title)) // 2
+    middle = "═══" + " " * pad + title + " " * (H1_RULE_LEN - 6 - pad - len(title)) + "═══"
+    return Group(
+        Text(bar, style=S_RULE),
+        Text(middle, style=S_SECTION),
+        Text(bar, style=S_RULE),
+    )
+
+
+def _r_test_config(args: argparse.Namespace, duration: float) -> Group:
+    rows = []
+    rows.append(_r_section("TEST CONFIGURATION"))
+    def _row(label: str, value: str) -> Text:
+        t = Text("  ")
+        t.append(label, style=S_DIM)
+        t.append(value)
+        return t
+    rows.append(_row(f"Audio:      ", f"{args.audio} ({duration:.2f} seconds)"))
+    if args.spoken:
+        rows.append(_row("Says:       ", f"\"{args.spoken}\""))
+    rows.append(_row("Iterations: ", f"{args.runs} per model"))
+    if args.prewarm_ms > 0:
+        rows.append(_row("Pre-warm:   ", f"{args.prewarm_ms}ms of silence to warm the connection"))
+    else:
+        rows.append(_row("Pre-warm:   ", "none (cold start)"))
+    if args.realtime:
+        rows.append(_row("Pacing:     ", "realtime (1x) to simulate a live mic"))
+    else:
+        rows.append(_row("Pacing:     ", "as fast as possible (batch mode)"))
+    return Group(*rows)
+
+
+def _r_preamble() -> Group:
+    out = []
+    out.append(_r_section("WHAT YOU'RE ABOUT TO SEE — READ THIS FIRST"))
+    out.append(Text(""))
+    out.append(Text("▸ The metric that matters", style=S_BOLD))
+    out.append(Text(""))
+    p1 = Text("  Voice agents feel slow because of ONE number: ")
+    p1.append("EOU latency", style=S_EOU)
+    p1.append(" — the\n  dead air between when the user stops talking and when the\n  transcript locks. That's the only latency your users actually feel.")
+    out.append(p1)
+    out.append(Text(""))
+    out.append(Text("▸ The marketing number", style=S_BOLD))
+    out.append(Text(""))
+    p2 = Text("  ")
+    p2.append("TTFT (first-int)", style=S_FIRST_INT)
+    p2.append(" is how fast the first word appears as you talk.\n  It tells you the pipe is alive but doesn't predict conversation\n  feel. We report it but don't optimize for it.")
+    out.append(p2)
+    out.append(Text(""))
+    out.append(Text("▸ The two columns", style=S_BOLD))
+    out.append(Text(""))
+    p3 = Text("  ")
+    p3.append("wall-clock", style=S_BOLD)
+    p3.append("    The raw measurement. Stopwatch from when audio starts\n                 flowing until the transcript locks. Includes your\n                 network round-trip.")
+    out.append(p3)
+    out.append(Text(""))
+    p4 = Text("  ")
+    p4.append("service-only", style=S_BOLD)
+    p4.append("  An estimate of the engine alone. We approximate it by\n                 subtracting one measured RTT from the wall-clock number.\n                 It's not perfect — a more rigorous test would inject\n                 timestamps into the audio sample itself — but it's close\n                 enough to compare engines fairly across regions.")
+    out.append(p4)
+    return Group(*out)
+
+
+def _r_legend(verbose: bool) -> Group:
+    out = []
+    out.append(_r_section("LEGEND"))
+    eou_t = Text("  ")
+    eou_t.append("EOU", style=S_EOU)
+    eou_t.append(" (\"End of Utterance\")")
+    out.append(eou_t)
+    out.append(Text("    The dead air after the user stops talking.", style=S_DIM))
+    out.append(Text("    This is the number that decides how fast your bot replies.", style=S_DIM))
+    out.append(Text(""))
+    fi_t = Text("  ")
+    fi_t.append("first-int", style=S_FIRST_INT)
+    fi_t.append(" (\"first interim\", a.k.a. TTFT or Time To First Token)")
+    out.append(fi_t)
+    out.append(Text("    The first guess the engine ships after audio starts.", style=S_DIM))
+    out.append(Text("    Comes back fast. Don't optimize for it.", style=S_DIM))
+    out.append(Text(""))
+    total_t = Text("  ")
+    total_t.append("total", style=S_BOLD)
+    total_t.append("       End-to-end duration of the run.")
+    out.append(total_t)
+    out.append(Text("    Sanity check, not a comparison metric.", style=S_DIM))
+    out.append(Text(""))
+    if verbose:
+        out.append(Text("  first-final time from audio-started → first final transcript"))
+        out.append(Text("  last-final  time from audio-started → last final transcript"))
+        out.append(Text(""))
+    rtt_t = Text("  ")
+    rtt_t.append("RTT", style=S_BOLD)
+    rtt_t.append(" (\"Round-Trip Time\")")
+    out.append(rtt_t)
+    out.append(Text("    Network latency between your machine and Telnyx.", style=S_DIM))
+    out.append(Text("    We subtract one RTT from wall-clock to get service-only.", style=S_DIM))
+    out.append(Text(""))
+    p_t = Text("  ")
+    p_t.append("p50 / p95", style=S_BOLD)
+    p_t.append("   The median (p50) and the tail (p95). Half your runs")
+    out.append(p_t)
+    out.append(Text("              beat p50; 5% are slower than p95. p50 tells you what"))
+    out.append(Text("              normal feels like; p95 tells you how bad the bad days get."))
+    if not verbose:
+        out.append(Text(""))
+        out.append(Text("  Tip: pass --verbose to include first-final and last-final.", style=S_DIM))
+    return Group(*out)
+
+
+def _r_running_intro() -> Group:
+    out = []
+    out.append(_r_section("RUNNING"))
+    out.append(Text(""))
+    out.append(Text("  Each iteration runs both models back-to-back: nova-3, then flux.", style=S_DIM))
+    out.append(Text("  We do this so network jitter affects both equally — if your Wi-Fi", style=S_DIM))
+    out.append(Text("  blips, both models see it. Iteration 1 streams the live interim/", style=S_DIM))
+    out.append(Text("  final transcripts so you can see what the engine is hearing.", style=S_DIM))
+    out.append(Text("  Iterations 2+ show metrics only.", style=S_DIM))
+    out.append(Text(""))
+    return Group(*out)
+
+
+def _r_iter_header(idx_str: str, model_label: str) -> Text:
+    t = Text("  ")
+    t.append(idx_str + " ", style=S_DIM)
+    t.append(f"{model_label:<8}", style=S_MODEL_ITER)
+    t.append(" running...", style=S_DIM)
+    return t
+
+
+def _r_iter_stream_line(is_final: bool, text: str) -> Text:
+    label = "final:   " if is_final else "interim: "
+    out = Text("    ")
+    out.append(label, style=S_DIM)
+    out.append(text)
+    return out
+
+
+def _r_iter_metrics(eou: Optional[float], fi: Optional[float]) -> Text:
+    eou_str = f"{eou:.0f}ms" if eou is not None else "—"
+    fi_str = f"{fi:.0f}ms" if fi is not None else "—"
+    out = Text("    ")
+    out.append("metrics:  ", style=S_DIM)
+    out.append("EOU ", style=S_EOU)
+    out.append(eou_str, style=S_EOU)
+    out.append("   first-int ", style=S_DIM)
+    out.append(fi_str, style=S_DIM)
+    return out
+
+
+def _r_iter_compact(idx_str: str, model_label: str, ok: bool, eou: Optional[float], fi: Optional[float]) -> Text:
+    eou_str = f"{eou:>5.0f}ms" if eou is not None else "    —  "
+    fi_str = f"{fi:>5.0f}ms" if fi is not None else "    —  "
+    out = Text("  ")
+    out.append(idx_str + " ", style=S_DIM)
+    out.append(f"{model_label:<8}", style=S_MODEL_ITER)
+    if ok:
+        out.append("   ok    ", style=S_OK)
+    else:
+        out.append("   fail  ", style=S_FAIL)
+    out.append("EOU ", style=S_EOU)
+    out.append(eou_str, style=S_EOU)
+    out.append("   first-int ", style=S_DIM)
+    out.append(fi_str, style=S_DIM)
+    return out
+
+
+def _r_transcripts(all_results: list, configs: list) -> Group:
+    out = []
+    out.append(Text(""))
+    out.append(Text("  Transcripts captured:", style=S_DIM))
+    for engine, model in configs:
+        label = model if model else engine.lower()
+        rs = [r for r in all_results if r.engine == engine and r.model == model and not r.error]
+        transcripts = [r.transcript.strip() for r in rs if r.transcript.strip()]
+        if not transcripts:
+            out.append(Text(f"    {label:<10} (no transcript captured)"))
+            continue
+        unique = set(transcripts)
+        canonical = max(unique, key=lambda t: transcripts.count(t))
+        agree = transcripts.count(canonical)
+        out.append(Text(f"    {label:<10} {agree}/{len(rs)} agreed: \"{canonical}\""))
+        if len(unique) > 1:
+            out.append(Text(f"               note: {len(unique) - 1} iteration(s) returned different text — see --json", style=S_DIM))
+    return Group(*out)
+
+
+def _r_results(all_results: list, configs: list, verbose: bool) -> Group:
+    out = []
+    out.append(Text(""))
+    out.append(_r_section("RESULTS"))
+    out.append(Text("  Both columns shown side-by-side keeps us honest. Wall-clock is the", style=S_DIM))
+    out.append(Text("  full number including your network — service-only is what we estimate", style=S_DIM))
+    out.append(Text("  the engine alone is doing. You see both, you do the math.", style=S_DIM))
+    out.append(Text(""))
+
+    for engine, model in configs:
+        rs = [r for r in all_results if r.engine == engine and r.model == model]
+        ok = [r for r in rs if not r.error]
+        label = model if model else engine.lower()
+
+        def wall(attr: str) -> list:
+            return [getattr(r, attr) for r in ok if getattr(r, attr) is not None]
+
+        def service(attr: str) -> list:
+            vals = []
+            for r in ok:
+                v = getattr(r, attr)
+                if v is not None and r.rtt_ms is not None:
+                    vals.append(max(v - r.rtt_ms, 0))
+            return vals
+
+        eou_wall = [v for v in (eou_ms(r) for r in ok) if v is not None]
+        eou_service = [
+            max(v - r.rtt_ms, 0)
+            for r, v in ((r, eou_ms(r)) for r in ok)
+            if v is not None and r.rtt_ms is not None
+        ]
+        rtt_vals = [r.rtt_ms for r in ok if r.rtt_ms is not None]
+
+        rows = [
+            ("EOU", eou_wall, eou_service),
+            ("first-int", wall("ttf_interim_ms"), service("ttf_interim_ms")),
+            ("total", [r.total_ms for r in ok], service("total_ms")),
+        ]
+        if verbose:
+            rows.append(("first-final", wall("ttf_final_ms"), service("ttf_final_ms")))
+            rows.append(("last-final", wall("ttf_last_final_ms"), service("ttf_last_final_ms")))
+        rows.append(("RTT", rtt_vals, None))
+
+        label_t = Text("  ")
+        label_t.append(label, style=S_MODEL_RES)
+        out.append(label_t)
+        out.append(Text(f"  ({len(ok)}/{len(rs)} iterations)", style=S_DIM))
+        out.append(Text(""))
+
+        header = Text(f"  {'':<11} ")
+        header.append(f"{'service-only (- RTT)':<38}", style=S_DIM)
+        header.append("  wall-clock", style=S_DIM)
+        out.append(header)
+
+        for metric_name, vals, svc in rows:
+            if not vals:
+                out.append(Text(f"  {metric_name:<11} no data", style=S_DIM))
+                continue
+            mean, p50, p95, _sd = _stats(vals)
+            is_eou = (metric_name == "EOU")
+            metric_style = S_EOU if is_eou else S_DIM
+            num_style = S_BOLD if is_eou else S_DIM
+            line = Text("  ")
+            line.append(f"{metric_name:<11} ", style=metric_style)
+            if svc:
+                s_mean, s_p50, s_p95, _ = _stats(svc)
+                svc_str = f"mean {s_mean:>4.0f}ms  p50 {s_p50:>4.0f}ms  p95 {s_p95:>4.0f}ms"
+                line.append(f"{svc_str:<38}", style=num_style)
+            else:
+                line.append(" " * 38, style=num_style)
+            wall_str = f"  mean {mean:>4.0f}ms  p50 {p50:>4.0f}ms  p95 {p95:>4.0f}ms"
+            line.append(wall_str, style=num_style)
+            out.append(line)
+        out.append(Text(""))
+
+    return Group(*out)
+
+
+async def _run_with_rich(args: argparse.Namespace, configs: list, api_key: str, console: Console) -> tuple:
+    duration = audio_duration(args.audio)
+
+    # Clear terminal so the UI begins fresh from the top.
+    console.clear()
+
+    top = Group(
+        _r_h1("DEEPGRAM STT LATENCY BENCHMARK"),
+        Text(""),
+        _r_test_config(args, duration),
+        Text(""),
+        _r_preamble(),
+        Text(""),
+        _r_legend(args.verbose),
+    )
+    top_panel = Panel(top, border_style=S_RULE, padding=(0, 1))
+
+    bottom_lines: list = [_r_running_intro()]
+
+    def render() -> Group:
+        bottom_panel = Panel(Group(*bottom_lines), border_style=S_RULE, padding=(0, 1))
+        return Group(top_panel, bottom_panel)
+
+    all_results: list = []
+    with Live(render(), console=console, refresh_per_second=8, transient=False, screen=False) as live:
+        def refresh_bottom():
+            live.update(render())
+        for run_idx in range(args.runs):
+            _CURRENT_ITER["idx"] = run_idx + 1
+            for engine, model in configs:
+                model_label = model if model else (engine.lower())
+                rw = len(str(args.runs))
+                idx_str = f"[{run_idx + 1:>{rw}}/{args.runs}]"
+                demo = run_idx == 0
+
+                if demo:
+                    bottom_lines.append(_r_iter_header(idx_str, model_label))
+                    refresh_bottom()
+
+                stream_cb = None
+                if demo:
+                    def make_cb():
+                        def cb(is_final: bool, text: str) -> None:
+                            bottom_lines.append(_r_iter_stream_line(is_final, text))
+                            refresh_bottom()
+                        return cb
+                    stream_cb = make_cb()
+
+                r = await stream_one(
+                    args.audio, engine, model, api_key, args.realtime,
+                    prewarm_ms=args.prewarm_ms, strip_wav_header=args.strip_wav_header,
+                    on_stream=stream_cb,
+                )
+                all_results.append(r)
+
+                eou = eou_ms(r)
+                if demo:
+                    bottom_lines.append(_r_iter_metrics(eou, r.ttf_interim_ms))
+                    bottom_lines.append(Text(""))
+                else:
+                    bottom_lines.append(_r_iter_compact(idx_str, model_label, not r.error, eou, r.ttf_interim_ms))
+                refresh_bottom()
+
+        bottom_lines.append(_r_transcripts(all_results, configs))
+        bottom_lines.append(_r_results(all_results, configs, args.verbose))
+        refresh_bottom()
+        live.refresh()
+
+    return all_results, 1 if any(r.error for r in all_results) else 0
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Telnyx standalone STT latency test")
     p.add_argument("--audio", default="samples/sample.wav", help="path to WAV file (default: samples/sample.wav)")
@@ -517,6 +908,7 @@ def main() -> None:
     p.add_argument("--runs", type=int, default=1, help="number of times to run each (engine, model) — reports mean/p50/p95/stddev (default: 1)")
     p.add_argument("--verbose", action="store_true", help="include first-final and last-final in the report (off by default)")
     p.add_argument("--json", action="store_true", help="print results as JSON after summary")
+    p.add_argument("--no-rich", action="store_true", help="disable the live two-panel UI; print linearly even when stdout is a TTY")
     args = p.parse_args()
     try:
         sys.exit(asyncio.run(main_async(args)))
