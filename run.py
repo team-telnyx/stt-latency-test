@@ -360,11 +360,6 @@ async def main_async(args: argparse.Namespace) -> int:
         _preamble()
         _legend(args.verbose)
         print()
-        try:
-            input("  Press Enter to start the benchmark... ")
-        except EOFError:
-            pass
-        print()
         _section("RUNNING")
         print()
         print("  Each iteration runs both models back-to-back: nova-3, then flux.")
