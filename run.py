@@ -253,16 +253,17 @@ _CURRENT_ITER: dict = {"idx": 0}
 # Telnyx brand green from the SVG mark.
 TELNYX_GREEN = "#00E3AA"
 
-S_RULE = "bright_white"
-S_SECTION = "bold bright_white"
+S_RULE = TELNYX_GREEN
+S_SECTION = f"bold {TELNYX_GREEN}"
 S_DIM = "dim"
 S_BOLD = "bold"
-S_EOU = f"bold {TELNYX_GREEN}"
+S_EOU = "bold yellow"
 S_FIRST_INT = "bold cyan"
 S_MODEL_RES = "bold cyan"
 S_MODEL_ITER = "cyan"
 S_OK = "green"
 S_FAIL = "bold red"
+S_PARAGRAPH = "white"  # primary text — was implicit terminal default; now explicit white
 
 
 def _h1(title: str) -> None:
@@ -317,21 +318,21 @@ def _legend(verbose: bool) -> None:
     eou_t.append("EOU", style=S_EOU)
     eou_t.append(" (\"End of Utterance\")")
     _console.print(eou_t)
-    _console.print(Text("    The dead air after the user stops talking.", style=S_DIM))
-    _console.print(Text("    This is the number that decides how fast your bot replies.", style=S_DIM))
+    _console.print(Text("    The dead air after the user stops talking.", style=S_PARAGRAPH))
+    _console.print(Text("    This is the number that decides how fast your bot replies.", style=S_PARAGRAPH))
     _console.print()
     fi_t = Text("  ")
     fi_t.append("first-int", style=S_FIRST_INT)
     fi_t.append(" (\"first interim\", a.k.a. TTFT or Time To First Token)")
     _console.print(fi_t)
-    _console.print(Text("    The first guess the engine ships after audio starts.", style=S_DIM))
-    _console.print(Text("    Comes back fast. Don't optimize for it.", style=S_DIM))
+    _console.print(Text("    The first guess the engine ships after audio starts.", style=S_PARAGRAPH))
+    _console.print(Text("    Comes back fast. Don't optimize for it.", style=S_PARAGRAPH))
     _console.print()
     total_t = Text("  ")
     total_t.append("total", style=S_BOLD)
     total_t.append("       End-to-end duration of the run.")
     _console.print(total_t)
-    _console.print(Text("    Sanity check, not a comparison metric.", style=S_DIM))
+    _console.print(Text("    Sanity check, not a comparison metric.", style=S_PARAGRAPH))
     _console.print()
     if verbose:
         _console.print(Text("  first-final time from audio-started → first final transcript"))
@@ -341,8 +342,8 @@ def _legend(verbose: bool) -> None:
     rtt_t.append("RTT", style=S_BOLD)
     rtt_t.append(" (\"Round-Trip Time\")")
     _console.print(rtt_t)
-    _console.print(Text("    Network latency between your machine and Telnyx.", style=S_DIM))
-    _console.print(Text("    We subtract one RTT from wall-clock to get service-only.", style=S_DIM))
+    _console.print(Text("    Network latency between your machine and Telnyx.", style=S_PARAGRAPH))
+    _console.print(Text("    We subtract one RTT from wall-clock to get service-only.", style=S_PARAGRAPH))
     _console.print()
     p_t = Text("  ")
     p_t.append("p50 / p95", style=S_BOLD)
@@ -421,7 +422,7 @@ async def main_async(args: argparse.Namespace) -> int:
             "  final transcripts so you can see what the engine is hearing.",
             "  Iterations 2+ show metrics only.",
         ]:
-            _console.print(Text(line, style=S_DIM))
+            _console.print(Text(line, style=S_PARAGRAPH))
         _console.print()
 
     all_results: list[Result] = []
@@ -536,7 +537,7 @@ def print_aggregate(results: list[Result], configs: list[tuple[str, Optional[str
         "  full number including your network — service-only is what we estimate",
         "  the engine alone is doing. You see both, you do the math.",
     ]:
-        _console.print(Text(line, style=S_DIM))
+        _console.print(Text(line, style=S_PARAGRAPH))
     _console.print()
     for engine, model in configs:
         rs = [r for r in results if r.engine == engine and r.model == model]
