@@ -20,6 +20,11 @@ from urllib.parse import urlencode
 
 import websockets
 
+from rich.console import Console, Group
+from rich.text import Text
+
+_console = Console()
+
 WS_URL = "wss://api.telnyx.com/v2/speech-to-text/transcription"
 CHUNK_BYTES = 2048
 
@@ -54,6 +59,7 @@ async def stream_one(
     prewarm_ms: int = 0,
     strip_wav_header: bool = False,
     show_stream: bool = False,
+    on_stream=None,
 ) -> Result:
     # Prewarm and header-strip both require raw PCM (linear16) because
     # input_format=wav makes the server reject any non-RIFF leading bytes.
@@ -163,9 +169,12 @@ async def stream_one(
                     text = msg.get("transcript", "").strip()
                     if not is_final and ttf_interim is None:
                         ttf_interim = now_ms
-                    if show_stream and text:
-                        label = "final:   " if is_final else "interim: "
-                        print(f"    {label} {text}", file=sys.stderr)
+                    if text:
+                        if on_stream is not None:
+                            on_stream(is_final, text)
+                        elif show_stream:
+                            label = "final:   " if is_final else "interim: "
+                            print(f"    {label} {text}", file=sys.stderr)
                     if is_final:
                         finals_count += 1
                         if ttf_first_final is None:
@@ -232,79 +241,118 @@ H1_RULE_LEN = 60
 
 _CURRENT_ITER: dict = {"idx": 0}
 
+# Color through-line:
+#   bold yellow = EOU (the metric that matters)
+#   bold cyan   = first-int / TTFT and model names in result tables
+#   cyan        = model names in iteration scroll
+#   dim         = secondary metrics, prefixes, explainer paragraphs
+#   bold        = numbers that matter (EOU values in tables, ▸ section headers)
+#   green       = ok status
+#   red         = fail / errors
+
+# Telnyx brand green from the SVG mark.
+TELNYX_GREEN = "#00E3AA"
+
+S_RULE = "bright_white"
+S_SECTION = "bold bright_white"
+S_DIM = "dim"
+S_BOLD = "bold"
+S_EOU = "bold yellow"
+S_FIRST_INT = f"bold {TELNYX_GREEN}"
+S_MODEL_RES = f"bold {TELNYX_GREEN}"
+S_MODEL_ITER = TELNYX_GREEN
+S_OK = "green"
+S_FAIL = "bold red"
+
 
 def _h1(title: str) -> None:
     bar = "═" * H1_RULE_LEN
-    inner = " " * H1_RULE_LEN
     pad = (H1_RULE_LEN - 6 - len(title)) // 2
     middle = "═══" + " " * pad + title + " " * (H1_RULE_LEN - 6 - pad - len(title)) + "═══"
-    print(bar)
-    print(middle)
-    print(bar)
+    _console.print(Text(bar, style=S_RULE))
+    _console.print(Text(middle, style=S_SECTION))
+    _console.print(Text(bar, style=S_RULE))
 
 
 def _section(title: str) -> None:
-    print(RULE)
-    print(f"  {title}")
-    print(RULE)
+    _console.print(Text(RULE, style=S_RULE))
+    _console.print(Text(f"  {title}", style=S_SECTION))
+    _console.print(Text(RULE, style=S_RULE))
 
 
 def _preamble() -> None:
     _section("WHAT YOU'RE ABOUT TO SEE — READ THIS FIRST")
-    print()
-    print("▸ The metric that matters")
-    print()
-    print("  Voice agents feel slow because of ONE number: EOU latency — the")
-    print("  dead air between when the user stops talking and when the")
-    print("  transcript locks. That's the only latency your users actually feel.")
-    print()
-    print("▸ The marketing number")
-    print()
-    print("  TTFT (first-int) is how fast the first word appears as you talk.")
-    print("  It tells you the pipe is alive but doesn't predict conversation")
-    print("  feel. We report it but don't optimize for it.")
-    print()
-    print("▸ The two columns")
-    print()
-    print("  wall-clock     The raw measurement. Stopwatch from when audio starts")
-    print("                 flowing until the transcript locks. Includes your")
-    print("                 network round-trip.")
-    print()
-    print("  service-only   An estimate of the engine alone. We approximate it by")
-    print("                 subtracting one measured RTT from the wall-clock number.")
-    print("                 It's not perfect — a more rigorous test would inject")
-    print("                 timestamps into the audio sample itself — but it's close")
-    print("                 enough to compare engines fairly across regions.")
-    print()
+    _console.print()
+    _console.print(Text("▸ The metric that matters", style=S_BOLD))
+    _console.print()
+    p1 = Text("  Voice agents feel slow because of ONE number: ")
+    p1.append("EOU latency", style=S_EOU)
+    p1.append(" — the\n  dead air between when the user stops talking and when the\n  transcript locks. That's the only latency your users actually feel.")
+    _console.print(p1)
+    _console.print()
+    _console.print(Text("▸ The marketing number", style=S_BOLD))
+    _console.print()
+    p2 = Text("  ")
+    p2.append("TTFT (first-int)", style=S_FIRST_INT)
+    p2.append(" is how fast the first word appears as you talk.\n  It tells you the pipe is alive but doesn't predict conversation\n  feel. We report it but don't optimize for it.")
+    _console.print(p2)
+    _console.print()
+    _console.print(Text("▸ The two columns", style=S_BOLD))
+    _console.print()
+    p3 = Text("  ")
+    p3.append("wall-clock", style=S_BOLD)
+    p3.append("    The raw measurement. Stopwatch from when audio starts\n                 flowing until the transcript locks. Includes your\n                 network round-trip.")
+    _console.print(p3)
+    _console.print()
+    p4 = Text("  ")
+    p4.append("service-only", style=S_BOLD)
+    p4.append("  An estimate of the engine alone. We approximate it by\n                 subtracting one measured RTT from the wall-clock number.\n                 It's not perfect — a more rigorous test would inject\n                 timestamps into the audio sample itself — but it's close\n                 enough to compare engines fairly across regions.")
+    _console.print(p4)
+    _console.print()
 
 
 def _legend(verbose: bool) -> None:
     _section("LEGEND")
-    print("  EOU (\"End of Utterance\")")
-    print("              The dead air after the user stops talking.")
-    print("              This is the number that decides how fast your bot replies.")
-    print()
-    print("  first-int (\"first interim\", a.k.a. TTFT or Time To First Token)")
-    print("              The first guess the engine ships after audio starts.")
-    print("              Comes back fast. Don't optimize for it.")
-    print()
-    print("  total       End-to-end duration of the run.")
-    print("              Sanity check, not a comparison metric.")
-    print()
+    eou_t = Text("  ")
+    eou_t.append("EOU", style=S_EOU)
+    eou_t.append(" (\"End of Utterance\")")
+    _console.print(eou_t)
+    _console.print(Text("    The dead air after the user stops talking.", style=S_DIM))
+    _console.print(Text("    This is the number that decides how fast your bot replies.", style=S_DIM))
+    _console.print()
+    fi_t = Text("  ")
+    fi_t.append("first-int", style=S_FIRST_INT)
+    fi_t.append(" (\"first interim\", a.k.a. TTFT or Time To First Token)")
+    _console.print(fi_t)
+    _console.print(Text("    The first guess the engine ships after audio starts.", style=S_DIM))
+    _console.print(Text("    Comes back fast. Don't optimize for it.", style=S_DIM))
+    _console.print()
+    total_t = Text("  ")
+    total_t.append("total", style=S_BOLD)
+    total_t.append("       End-to-end duration of the run.")
+    _console.print(total_t)
+    _console.print(Text("    Sanity check, not a comparison metric.", style=S_DIM))
+    _console.print()
     if verbose:
-        print("  first-final time from audio-started → first final transcript")
-        print("  last-final  time from audio-started → last final transcript")
-        print()
-    print("  RTT (\"Round-Trip Time\")")
-    print("              Network latency between your machine and Telnyx.")
-    print("              We subtract one RTT from wall-clock to get service-only.")
-    print()
-    print("  p50 / p95   The median (p50) and the tail (p95). Half your runs")
-    print("              beat p50; 5% are slower than p95. p50 tells you what")
-    print("              normal feels like; p95 tells you how bad the bad days get.")
+        _console.print(Text("  first-final time from audio-started → first final transcript"))
+        _console.print(Text("  last-final  time from audio-started → last final transcript"))
+        _console.print()
+    rtt_t = Text("  ")
+    rtt_t.append("RTT", style=S_BOLD)
+    rtt_t.append(" (\"Round-Trip Time\")")
+    _console.print(rtt_t)
+    _console.print(Text("    Network latency between your machine and Telnyx.", style=S_DIM))
+    _console.print(Text("    We subtract one RTT from wall-clock to get service-only.", style=S_DIM))
+    _console.print()
+    p_t = Text("  ")
+    p_t.append("p50 / p95", style=S_BOLD)
+    p_t.append("   The median (p50) and the tail (p95). Half your runs")
+    _console.print(p_t)
+    _console.print(Text("              beat p50; 5% are slower than p95. p50 tells you what"))
+    _console.print(Text("              normal feels like; p95 tells you how bad the bad days get."))
     if not verbose:
-        print()
-        print("  Tip: pass --verbose to include first-final and last-final.")
+        _console.print()
+        _console.print(Text("  Tip: pass --verbose to include first-final and last-final.", style=S_DIM))
 
 
 def print_summary(results: list[Result], verbose: bool) -> None:
@@ -342,29 +390,39 @@ async def main_async(args: argparse.Namespace) -> int:
     if args.runs > 1:
         duration = audio_duration(args.audio)
         _h1("DEEPGRAM STT LATENCY BENCHMARK")
-        print()
+        _console.print()
         _section("TEST CONFIGURATION")
-        print(f"  Audio:      {args.audio} ({duration:.2f} seconds)")
+
+        def _cfg(label: str, value: str) -> None:
+            t = Text("  ")
+            t.append(label, style=S_DIM)
+            t.append(value)
+            _console.print(t)
+
+        _cfg("Audio:      ", f"{args.audio} ({duration:.2f} seconds)")
         if args.spoken:
-            print(f"  Says:       \"{args.spoken}\"")
-        print(f"  Iterations: {args.runs} per model")
+            _cfg("Says:       ", f"\"{args.spoken}\"")
+        _cfg("Iterations: ", f"{args.runs} per model")
         if args.prewarm_ms > 0:
-            print(f"  Pre-warm:   {args.prewarm_ms}ms of silence to warm the connection")
+            _cfg("Pre-warm:   ", f"{args.prewarm_ms}ms of silence to warm the connection")
         else:
-            print("  Pre-warm:   none (cold start)")
-        print("  Pacing:     realtime (1x) to simulate a live mic")
-        print()
+            _cfg("Pre-warm:   ", "none (cold start)")
+        _cfg("Pacing:     ", "realtime (1x) to simulate a live mic")
+        _console.print()
         _preamble()
         _legend(args.verbose)
-        print()
+        _console.print()
         _section("RUNNING")
-        print()
-        print("  Each iteration runs both models back-to-back: nova-3, then flux.")
-        print("  We do this so network jitter affects both equally — if your Wi-Fi")
-        print("  blips, both models see it. Iteration 1 streams the live interim/")
-        print("  final transcripts so you can see what the engine is hearing.")
-        print("  Iterations 2+ show metrics only.")
-        print()
+        _console.print()
+        for line in [
+            "  Each iteration runs both models back-to-back: nova-3, then flux.",
+            "  We do this so network jitter affects both equally — if your Wi-Fi",
+            "  blips, both models see it. Iteration 1 streams the live interim/",
+            "  final transcripts so you can see what the engine is hearing.",
+            "  Iterations 2+ show metrics only.",
+        ]:
+            _console.print(Text(line, style=S_DIM))
+        _console.print()
 
     all_results: list[Result] = []
     for run_idx in range(args.runs):
@@ -376,45 +434,74 @@ async def main_async(args: argparse.Namespace) -> int:
             demo = run_idx == 0 and args.runs > 1
 
             if demo:
-                print(f"  {idx_str} {model_label:<8} running...", file=sys.stderr)
+                t = Text("  ")
+                t.append(idx_str + " ", style=S_DIM)
+                t.append(f"{model_label:<8}", style=S_MODEL_ITER)
+                t.append(" running...", style=S_DIM)
+                _console.print(t)
+
+            stream_cb = None
+            if demo:
+                def _on_stream(is_final: bool, text: str) -> None:
+                    label = "final:   " if is_final else "interim: "
+                    line = Text("    ")
+                    line.append(label, style=S_DIM)
+                    line.append(text)
+                    _console.print(line)
+                stream_cb = _on_stream
 
             r = await stream_one(
                 args.audio, engine, model, api_key, True,
                 prewarm_ms=args.prewarm_ms, strip_wav_header=args.strip_wav_header,
-                show_stream=demo,
+                on_stream=stream_cb,
             )
             all_results.append(r)
 
             if args.runs > 1:
-                marker = "ok  " if not r.error else "fail"
                 eou = eou_ms(r)
-                eou_str = f"{eou:>5.0f}ms" if eou is not None else "    —  "
-                fi_str = f"{r.ttf_interim_ms:>5.0f}ms" if r.ttf_interim_ms is not None else "    —  "
+                eou_str = f"{eou:.0f}ms" if eou is not None else "—"
+                fi_str = f"{r.ttf_interim_ms:.0f}ms" if r.ttf_interim_ms is not None else "—"
                 if demo:
-                    print(f"    metrics:  EOU {eou_str.strip()}   first-int {fi_str.strip()}",
-                          file=sys.stderr)
-                    print(file=sys.stderr)
+                    line = Text("    ")
+                    line.append("metrics:  ", style=S_DIM)
+                    line.append("EOU ", style=S_EOU)
+                    line.append(eou_str, style=S_EOU)
+                    line.append("   first-int ", style=S_DIM)
+                    line.append(fi_str, style=S_DIM)
+                    _console.print(line)
+                    _console.print()
                 else:
-                    print(f"  {idx_str} {model_label:<8} {marker}  "
-                          f"EOU {eou_str}   first-int {fi_str}",
-                          file=sys.stderr)
+                    eou_str_pad = f"{eou:>5.0f}ms" if eou is not None else "    —  "
+                    fi_str_pad = f"{r.ttf_interim_ms:>5.0f}ms" if r.ttf_interim_ms is not None else "    —  "
+                    line = Text("  ")
+                    line.append(idx_str + " ", style=S_DIM)
+                    line.append(f"{model_label:<8}", style=S_MODEL_ITER)
+                    if not r.error:
+                        line.append("   ok    ", style=S_OK)
+                    else:
+                        line.append("   fail  ", style=S_FAIL)
+                    line.append("EOU ", style=S_EOU)
+                    line.append(eou_str_pad, style=S_EOU)
+                    line.append("   first-int ", style=S_DIM)
+                    line.append(fi_str_pad, style=S_DIM)
+                    _console.print(line)
 
     if args.runs > 1:
-        print()
-        print("  Transcripts captured:")
+        _console.print()
+        _console.print(Text("  Transcripts captured:", style=S_DIM))
         for engine, model in configs:
             label = model if model else engine.lower()
             rs = [r for r in all_results if r.engine == engine and r.model == model and not r.error]
             transcripts = [r.transcript.strip() for r in rs if r.transcript.strip()]
             if not transcripts:
-                print(f"    {label:<10} (no transcript captured)")
+                _console.print(Text(f"    {label:<10} (no transcript captured)", style=S_DIM))
                 continue
             unique = set(transcripts)
             canonical = max(unique, key=lambda t: transcripts.count(t))
             agree = transcripts.count(canonical)
-            print(f"    {label:<10} {agree}/{len(rs)} agreed: \"{canonical}\"")
+            _console.print(Text(f"    {label:<10} {agree}/{len(rs)} agreed: \"{canonical}\""))
             if len(unique) > 1:
-                print(f"               note: {len(unique) - 1} iteration(s) returned different text — see --json")
+                _console.print(Text(f"               note: {len(unique) - 1} iteration(s) returned different text — see --json", style=S_DIM))
 
     if args.runs > 1:
         print_aggregate(all_results, configs, args.verbose)
@@ -441,13 +528,16 @@ def _stats(values: list[float]) -> tuple[float, float, float, float]:
 
 
 def print_aggregate(results: list[Result], configs: list[tuple[str, Optional[str]]], verbose: bool) -> None:
-    print()
+    _console.print()
     _section("RESULTS")
-    print()
-    print("  Both columns shown side-by-side keeps us honest. Wall-clock is the")
-    print("  full number including your network — service-only is what we estimate")
-    print("  the engine alone is doing. You see both, you do the math.")
-    print()
+    _console.print()
+    for line in [
+        "  Both columns shown side-by-side keeps us honest. Wall-clock is the",
+        "  full number including your network — service-only is what we estimate",
+        "  the engine alone is doing. You see both, you do the math.",
+    ]:
+        _console.print(Text(line, style=S_DIM))
+    _console.print()
     for engine, model in configs:
         rs = [r for r in results if r.engine == engine and r.model == model]
         ok = [r for r in rs if not r.error]
@@ -482,24 +572,37 @@ def print_aggregate(results: list[Result], configs: list[tuple[str, Optional[str
             rows.append(("last-final", wall("ttf_last_final_ms"), service("ttf_last_final_ms")))
         rows.append(("RTT", rtt_vals, None))
 
-        print(f"  {label}")
-        print(f"  ({len(ok)}/{len(rs)} iterations)")
-        print()
-        print(f"  {'':<11} {'service-only (- RTT)':<38}  wall-clock")
+        label_t = Text("  ")
+        label_t.append(label, style=S_MODEL_RES)
+        _console.print(label_t)
+        _console.print(Text(f"  ({len(ok)}/{len(rs)} iterations)", style=S_DIM))
+        _console.print()
+
+        header = Text(f"  {'':<11} ")
+        header.append(f"{'service-only (- RTT)':<38}", style=S_DIM)
+        header.append("  wall-clock", style=S_DIM)
+        _console.print(header)
+
         for metric_name, vals, svc in rows:
             if not vals:
-                print(f"  {metric_name:<11} no data")
+                _console.print(Text(f"  {metric_name:<11} no data", style=S_DIM))
                 continue
             mean, p50, p95, _sd = _stats(vals)
-            wall_col = f"mean {mean:>4.0f}ms  p50 {p50:>4.0f}ms  p95 {p95:>4.0f}ms"
+            is_eou = (metric_name == "EOU")
+            metric_style = S_EOU if is_eou else S_DIM
+            num_style = S_BOLD if is_eou else S_DIM
+            line = Text("  ")
+            line.append(f"{metric_name:<11} ", style=metric_style)
             if svc:
                 s_mean, s_p50, s_p95, _ = _stats(svc)
-                svc_col = f"mean {s_mean:>4.0f}ms  p50 {s_p50:>4.0f}ms  p95 {s_p95:>4.0f}ms"
-                line = f"  {metric_name:<11} {svc_col:<38}  {wall_col}"
+                svc_str = f"mean {s_mean:>4.0f}ms  p50 {s_p50:>4.0f}ms  p95 {s_p95:>4.0f}ms"
+                line.append(f"{svc_str:<38}", style=num_style)
             else:
-                line = f"  {metric_name:<11} {'':<38}  {wall_col}"
-            print(line)
-        print()
+                line.append(" " * 38, style=num_style)
+            wall_str = f"  mean {mean:>4.0f}ms  p50 {p50:>4.0f}ms  p95 {p95:>4.0f}ms"
+            line.append(wall_str, style=num_style)
+            _console.print(line)
+        _console.print()
 
 
 def main() -> None:
