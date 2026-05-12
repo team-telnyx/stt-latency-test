@@ -17,7 +17,7 @@ export TELNYX_API_KEY="your-key-here"
 .venv/bin/python run.py --runs 10
 ```
 
-The default run benchmarks Deepgram **nova-3** and **flux** side-by-side. 10 iterations per model so you get stable medians, not one noisy sample.
+The default run benchmarks Deepgram **nova-3**, Deepgram **flux**, **AssemblyAI**, and **xAI Grok** side-by-side. 10 iterations per model so you get stable medians, not one noisy sample.
 
 ## What you'll see
 
@@ -26,12 +26,16 @@ After the test config and a quick read of the educational header, the script str
 **Example:**
 
 ```
-  [10/10] nova-3   ok    EOU   408ms   first-int    47ms
-  [10/10] flux     ok    EOU   384ms   first-int    51ms
+  [10/10] nova-3      ok    EOU   408ms   first-int    47ms
+  [10/10] flux        ok    EOU   384ms   first-int    51ms
+  [10/10] aai/universal ok  EOU   412ms   first-int    55ms
+  [10/10] grok-stt    ok    EOU   396ms   first-int    48ms
 
   Transcripts captured:
-    nova-3     10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
-    flux       10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
+    nova-3      10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
+    flux        10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
+    aai/universal 10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
+    grok-stt    10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
 
 ══════════════════════════════════════════════════════════════
   RESULTS
@@ -48,6 +52,33 @@ After the test config and a quick read of the educational header, the script str
   first-int   mean    0ms  p50    0ms  p95   10ms   mean   49ms  p50   48ms  p95   62ms
   total       mean 8138ms  p50 8133ms  p95 8218ms   mean 8210ms  p50 8205ms  p95 8290ms
   RTT                                               mean   71ms  p50   71ms  p95   75ms
+
+  flux
+  (10/10 iterations)
+
+              service-only (- RTT)                wall-clock
+  EOU         mean  322ms  p50  319ms  p95  381ms   mean  394ms  p50  391ms  p95  453ms
+  first-int   mean    1ms  p50    0ms  p95   10ms   mean   52ms  p50   51ms  p95   63ms
+  total       mean 8125ms  p50 8120ms  p95 8205ms   mean 8197ms  p50 8192ms  p95 8277ms
+  RTT                                               mean   71ms  p50   71ms  p95   75ms
+
+  aai/universal
+  (10/10 iterations)
+
+              service-only (- RTT)                wall-clock
+  EOU         mean  350ms  p50  347ms  p95  410ms   mean  422ms  p50  419ms  p95  482ms
+  first-int   mean    3ms  p50    2ms  p95   12ms   mean   55ms  p50   54ms  p95   67ms
+  total       mean 8140ms  p50 8135ms  p95 8220ms   mean 8212ms  p50 8207ms  p95 8292ms
+  RTT                                               mean   72ms  p50   72ms  p95   76ms
+
+  grok-stt
+  (10/10 iterations)
+
+              service-only (- RTT)                wall-clock
+  EOU         mean  334ms  p50  331ms  p95  393ms   mean  406ms  p50  403ms  p95  465ms
+  first-int   mean    1ms  p50    0ms  p95    8ms   mean   48ms  p50   47ms  p95   60ms
+  total       mean 8130ms  p50 8125ms  p95 8210ms   mean 8202ms  p50 8197ms  p95 8282ms
+  RTT                                               mean   72ms  p50   72ms  p95   76ms
 ```
 
 ## What the numbers mean
@@ -96,6 +127,24 @@ Plain-language definitions for the broader terms. Use these directly with custom
 **VAD (Voice Activity Detection)** — The engine's "is someone talking right now?" detector. Drives endpointing and powers things like barge-in.
 
 **Pre-warm** — Sending a moment of silence before the real audio so the connection and model are already running. Avoids cold-start lag (~1 second penalty without it).
+
+## Supported engines
+
+The default sweep benchmarks four engines side-by-side:
+
+| Engine       | Model                          | Display label   | Best for                                    |
+| ------------ | ------------------------------ | --------------- | ------------------------------------------- |
+| **Deepgram** | `nova-3`                       | nova-3          | Highest English accuracy, diarization       |
+| **Deepgram** | `flux`                         | flux            | Lowest latency, built-in end-of-turn        |
+| **AssemblyAI** | `assemblyai/universal-streaming` | aai/universal | Low latency, built-in turn detection        |
+| **xAI**      | `xai/grok-stt`                  | grok-stt       | Multilingual auto-detection (25 languages)  |
+
+You can also test any single engine with `--engine` and `--model`:
+
+```
+python run.py --engine AssemblyAI --model assemblyai/universal-streaming
+python run.py --engine xAI --model xai/grok-stt
+```
 
 ## Resources
 

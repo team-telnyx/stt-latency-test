@@ -4,7 +4,7 @@
 Streams an audio file to the Telnyx STT WebSocket and reports
 streaming and finalization latency.
 
-Default: benchmarks Deepgram nova-3 and flux side-by-side.
+Default: benchmarks Deepgram nova-3, Deepgram flux, AssemblyAI, and xAI Grok side-by-side.
 """
 
 import argparse
@@ -254,6 +254,24 @@ _CURRENT_ITER: dict = {"idx": 0}
 TELNYX_GREEN = "#00E3AA"
 
 S_RULE = TELNYX_GREEN
+
+# Short display labels for model names in iteration scroll and result tables.
+# Keeps output compact — the full model name lives in the Result dataclass for JSON output.
+_DISPLAY_LABELS: dict[tuple[str, str], str] = {
+    ("Deepgram", "nova-3"): "nova-3",
+    ("Deepgram", "flux"): "flux",
+    ("AssemblyAI", "assemblyai/universal-streaming"): "aai/universal",
+    ("xAI", "xai/grok-stt"): "grok-stt",
+}
+
+
+def display_label(engine: str, model: Optional[str]) -> str:
+    """Return a short display label for an (engine, model) pair."""
+    if model and (engine, model) in _DISPLAY_LABELS:
+        return _DISPLAY_LABELS[(engine, model)]
+    if model:
+        return model
+    return engine.lower()
 S_SECTION = f"bold {TELNYX_GREEN}"
 S_DIM = "dim"
 S_BOLD = "bold"
@@ -367,10 +385,10 @@ async def main_async(args: argparse.Namespace) -> int:
     if args.engine:
         configs = [(args.engine, args.model)]
     else:
-        configs = [("Deepgram", "nova-3"), ("Deepgram", "flux")]
+        configs = [("Deepgram", "nova-3"), ("Deepgram", "flux"), ("AssemblyAI", "assemblyai/universal-streaming"), ("xAI", "xai/grok-stt")]
 
     duration = audio_duration(args.audio)
-    _h1("TELNYX DEEPGRAM STT LATENCY BENCHMARK")
+    _h1("TELNYX STT LATENCY BENCHMARK")
     _console.print()
     _section("TEST CONFIGURATION")
 
@@ -396,11 +414,10 @@ async def main_async(args: argparse.Namespace) -> int:
     _section("RUNNING")
     _console.print()
     for line in [
-        "  Each iteration runs both models back-to-back: nova-3, then flux.",
-        "  We do this so network jitter affects both equally — if your Wi-Fi",
-        "  blips, both models see it. Iteration 1 streams the live interim/",
-        "  final transcripts so you can see what the engine is hearing.",
-        "  Iterations 2+ show metrics only.",
+        "  Each iteration runs all models back-to-back so network jitter",
+        "  affects them equally — if your Wi-Fi blips, all models see it.",
+        "  Iteration 1 streams the live interim/final transcripts so you can",
+        "  see what the engine is hearing. Iterations 2+ show metrics only.",
     ]:
         _console.print(Text(line, style=S_PARAGRAPH))
     _console.print()
@@ -409,7 +426,7 @@ async def main_async(args: argparse.Namespace) -> int:
     for run_idx in range(args.runs):
         _CURRENT_ITER["idx"] = run_idx + 1
         for engine, model in configs:
-            model_label = model if model else (engine.lower())
+            model_label = display_label(engine, model)
             max_idx_len = len(f"[{args.runs}/{args.runs}]")
             idx_str = f"[{run_idx + 1}/{args.runs}]".rjust(max_idx_len)
             demo = run_idx == 0
@@ -469,7 +486,7 @@ async def main_async(args: argparse.Namespace) -> int:
     _console.print()
     _console.print(Text("  Transcripts captured:", style=S_DIM))
     for engine, model in configs:
-        label = model if model else engine.lower()
+        label = display_label(engine, model)
         rs = [r for r in all_results if r.engine == engine and r.model == model and not r.error]
         transcripts = [r.transcript.strip() for r in rs if r.transcript.strip()]
         if not transcripts:
@@ -517,7 +534,7 @@ def print_aggregate(results: list[Result], configs: list[tuple[str, Optional[str
     for engine, model in configs:
         rs = [r for r in results if r.engine == engine and r.model == model]
         ok = [r for r in rs if not r.error]
-        label = model if model else engine.lower()
+        label = display_label(engine, model)
 
         def wall(attr: str) -> list[float]:
             return [getattr(r, attr) for r in ok if getattr(r, attr) is not None]
@@ -590,8 +607,8 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Telnyx standalone STT latency test")
     p.add_argument("--audio", default="samples/sample.wav", help="path to WAV file (default: samples/sample.wav)")
     p.add_argument("--spoken", default="Hello, my name is Jon and I'm testing speech recognition.", help="text spoken in the audio file, displayed in the test configuration")
-    p.add_argument("--engine", help="single engine to test (Telnyx, Deepgram, Google, Azure). Default: nova-3+flux sweep")
-    p.add_argument("--model", help="model name (Deepgram only: nova-2, nova-3, flux)")
+    p.add_argument("--engine", help="single engine to test (Deepgram, AssemblyAI, xAI, Google, Azure). Default: multi-engine sweep")
+    p.add_argument("--model", help="model name (Deepgram: nova-2, nova-3, flux; AssemblyAI: assemblyai/universal-streaming; xAI: xai/grok-stt)")
     p.add_argument("--prewarm-ms", type=int, default=1000, help="send N ms of silence before real audio to warm the upstream connection + Deepgram VAD/model. Default 1000ms reflects the warmed-state latency a real voice agent experiences. Set to 0 to measure cold-start.")
     p.add_argument("--strip-wav-header", action="store_true", help="skip the 44-byte WAV header so only raw PCM is sent")
     p.add_argument("--runs", type=int, default=1, help="number of times to run each (engine, model) — reports mean/p50/p95/stddev (default: 1)")
