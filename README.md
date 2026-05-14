@@ -17,7 +17,9 @@ export TELNYX_API_KEY="your-key-here"
 .venv/bin/python run.py --runs 10
 ```
 
-The default run benchmarks Deepgram **nova-3**, Deepgram **flux**, **AssemblyAI**, and **xAI Grok** side-by-side. 10 iterations per model so you get stable medians, not one noisy sample.
+The default run benchmarks Deepgram **nova-3**, Deepgram **flux**, **AssemblyAI**, **xAI Grok**, **Soniox**, and **Speechmatics** side-by-side. 10 iterations per model so you get stable medians, not one noisy sample.
+
+By default the harness sends 1 second of pre-warm silence before the test audio. The timer starts after pre-warm. The multi-engine sweep also applies fixture-specific settings where required so each engine can emit a usable final transcript.
 
 ## What you'll see
 
@@ -26,16 +28,20 @@ After the test config and a quick read of the educational header, the script str
 **Example:**
 
 ```
-  [10/10] nova-3      ok    EOU   408ms   first-int    47ms
-  [10/10] flux        ok    EOU   384ms   first-int    51ms
-  [10/10] aai/universal ok  EOU   412ms   first-int    55ms
-  [10/10] grok-stt    ok    EOU   396ms   first-int    48ms
+  [10/10] nova-3      ok    EOU   396ms   first-int    88ms
+  [10/10] flux        ok    EOU   410ms   first-int    95ms
+  [10/10] aai/universal ok  EOU   553ms   first-int  1506ms
+  [10/10] grok-stt    ok    EOU   557ms   first-int   717ms
+  [10/10] soniox      ok    EOU   714ms   first-int  1065ms
+  [10/10] speechmatics ok   EOU   453ms   first-int   970ms
 
   Transcripts captured:
     nova-3      10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
     flux        10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
     aai/universal 10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
     grok-stt    10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
+    soniox      10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
+    speechmatics 10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
 
 ══════════════════════════════════════════════════════════════
   RESULTS
@@ -130,7 +136,7 @@ Plain-language definitions for the broader terms. Use these directly with custom
 
 ## Supported engines
 
-The default sweep benchmarks four engines side-by-side:
+The default sweep benchmarks six engines side-by-side:
 
 | Engine       | Model                          | Display label   | Best for                                    |
 | ------------ | ------------------------------ | --------------- | ------------------------------------------- |
@@ -138,12 +144,21 @@ The default sweep benchmarks four engines side-by-side:
 | **Deepgram** | `flux`                         | flux            | Lowest latency, built-in end-of-turn        |
 | **AssemblyAI** | `assemblyai/universal-streaming` | aai/universal | Low latency, built-in turn detection        |
 | **xAI**      | `xai/grok-stt`                  | grok-stt       | Multilingual auto-detection (25 languages)  |
+| **Soniox**   | `soniox/stt-rt-preview`         | soniox         | Low-latency realtime transcription          |
+| **Speechmatics** | `speechmatics/rt`             | speechmatics   | Realtime transcription with broad language coverage |
+
+Two default configs are engine-specific:
+
+- AssemblyAI is run with `language=en-US` for the English sample.
+- Soniox is run with `endpointing=500` and 2 seconds of trailing silence; without this, it streams interim text but may not emit a complete final for this fixture.
 
 You can also test any single engine with `--engine` and `--model`:
 
 ```
 python run.py --engine AssemblyAI --model assemblyai/universal-streaming
 python run.py --engine xAI --model xai/grok-stt
+python run.py --engine Soniox --model soniox/stt-rt-preview --endpointing 500 --trailing-silence-ms 2000
+python run.py --engine Speechmatics --model speechmatics/rt
 ```
 
 ## Resources
