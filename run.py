@@ -286,10 +286,10 @@ S_RULE = TELNYX_GREEN
 _DISPLAY_LABELS: dict[tuple[str, str], str] = {
     ("Deepgram", "nova-3"): "nova-3",
     ("Deepgram", "flux"): "flux",
-    ("AssemblyAI", "assemblyai/universal-streaming"): "aai/universal",
+    ("AssemblyAI", "assemblyai/universal-streaming"): "aai/univ",
     ("xAI", "xai/grok-stt"): "grok-stt",
     ("Soniox", "soniox/stt-rt-preview"): "soniox",
-    ("Speechmatics", "speechmatics/rt"): "speechmatics",
+    ("Speechmatics", "speechmatics/rt"): "speechm",
 }
 
 
@@ -670,7 +670,7 @@ def main() -> None:
     p.add_argument("--model", help="model name (Deepgram: nova-2, nova-3, flux; AssemblyAI: assemblyai/universal-streaming; xAI: xai/grok-stt; Soniox: soniox/stt-rt-preview; Speechmatics: speechmatics/rt)")
     p.add_argument("--language", help="language hint for a single-engine test")
     p.add_argument("--endpointing", help="endpointing value for a single-engine test")
-    p.add_argument("--prewarm-ms", type=int, default=1000, help="send N ms of silence before real audio to warm the upstream connection + Deepgram VAD/model. Default 1000ms reflects the warmed-state latency a real voice agent experiences. Set to 0 to measure cold-start.")
+    p.add_argument("--prewarm-ms", type=int, default=1000, help="send N ms of silence before real audio to warm the upstream connection + VAD/model. Default 1000ms reflects the warmed-state latency a real voice agent experiences. Set to 0 to measure cold-start.")
     p.add_argument("--trailing-silence-ms", type=int, default=0, help="send N ms of silence after real audio before closing the stream. Default 0 for single-engine tests; the default multi-engine sweep adds this only where required.")
     p.add_argument("--strip-wav-header", action="store_true", help="skip the 44-byte WAV header so only raw PCM is sent")
     p.add_argument("--runs", type=int, default=1, help="number of times to run each (engine, model) — reports mean/p50/p95/stddev (default: 1)")

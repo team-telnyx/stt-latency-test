@@ -28,20 +28,20 @@ After the test config and a quick read of the educational header, the script str
 **Example:**
 
 ```
-  [10/10] nova-3      ok    EOU   396ms   first-int    88ms
-  [10/10] flux        ok    EOU   410ms   first-int    95ms
-  [10/10] aai/universal ok  EOU   553ms   first-int  1506ms
-  [10/10] grok-stt    ok    EOU   557ms   first-int   717ms
-  [10/10] soniox      ok    EOU   714ms   first-int  1065ms
-  [10/10] speechmatics ok   EOU   453ms   first-int   970ms
+  [10/10] nova-3    ✓    EOU   396ms   first-int    88ms
+  [10/10] flux      ✓    EOU   410ms   first-int    95ms
+  [10/10] aai/univ  ✓    EOU   553ms   first-int  1506ms
+  [10/10] grok-stt  ✓    EOU   557ms   first-int   717ms
+  [10/10] soniox    ✓    EOU   714ms   first-int  1065ms
+  [10/10] speechm   ✓    EOU   453ms   first-int   970ms
 
   Transcripts captured:
     nova-3      10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
     flux        10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
-    aai/universal 10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
-    grok-stt    10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
-    soniox      10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
-    speechmatics 10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
+    aai/univ  10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
+    grok-stt  10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
+    soniox    10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
+    speechm   10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
 
 ══════════════════════════════════════════════════════════════
   RESULTS
@@ -142,10 +142,10 @@ The default sweep benchmarks six engines side-by-side:
 | ------------ | ------------------------------ | --------------- | ------------------------------------------- |
 | **Deepgram** | `nova-3`                       | nova-3          | Highest English accuracy, diarization       |
 | **Deepgram** | `flux`                         | flux            | Lowest latency, built-in end-of-turn        |
-| **AssemblyAI** | `assemblyai/universal-streaming` | aai/universal | Low latency, built-in turn detection        |
+| **AssemblyAI** | `assemblyai/universal-streaming` | aai/univ | Low latency, built-in turn detection        |
 | **xAI**      | `xai/grok-stt`                  | grok-stt       | Multilingual auto-detection (25 languages)  |
 | **Soniox**   | `soniox/stt-rt-preview`         | soniox         | Low-latency realtime transcription          |
-| **Speechmatics** | `speechmatics/rt`             | speechmatics   | Realtime transcription with broad language coverage |
+| **Speechmatics** | `speechmatics/rt`             | speechm   | Realtime transcription with broad language coverage |
 
 Two default configs are engine-specific:
 
