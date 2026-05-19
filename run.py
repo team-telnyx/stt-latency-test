@@ -4,7 +4,8 @@
 Streams an audio file to the Telnyx STT WebSocket and reports
 streaming and finalization latency.
 
-Default: benchmarks Deepgram nova-3 and flux side-by-side.
+Default: benchmarks Deepgram nova-3, Deepgram flux, AssemblyAI, xAI Grok,
+Soniox, and Speechmatics side-by-side.
 """
 
 import argparse
@@ -45,6 +46,15 @@ class Result:
     finals_count: int = 0
 
 
+@dataclass(frozen=True)
+class BenchmarkConfig:
+    engine: str
+    model: Optional[str]
+    language: Optional[str] = None
+    endpointing: Optional[str] = None
+    trailing_silence_ms: Optional[int] = None
+
+
 def audio_duration(path: str) -> float:
     with wave.open(path, "rb") as w:
         return w.getnframes() / float(w.getframerate())
@@ -57,13 +67,16 @@ async def stream_one(
     api_key: str,
     realtime: bool,
     prewarm_ms: int = 0,
+    trailing_silence_ms: int = 0,
+    language: Optional[str] = None,
+    endpointing: Optional[str] = None,
     strip_wav_header: bool = False,
     show_stream: bool = False,
     on_stream=None,
 ) -> Result:
     # Prewarm and header-strip both require raw PCM (linear16) because
     # input_format=wav makes the server reject any non-RIFF leading bytes.
-    use_raw_pcm = strip_wav_header or prewarm_ms > 0
+    use_raw_pcm = strip_wav_header or prewarm_ms > 0 or trailing_silence_ms > 0
     params: dict[str, str] = {
         "transcription_engine": engine,
         "interim_results": "true",
@@ -78,6 +91,10 @@ async def stream_one(
         params["input_format"] = "wav"
     if model:
         params["transcription_model"] = model
+    if language:
+        params["language"] = language
+    if endpointing:
+        params["endpointing"] = endpointing
     url = f"{WS_URL}?{urlencode(params)}"
     headers = {"Authorization": f"Bearer {api_key}"}
 
@@ -136,6 +153,15 @@ async def stream_one(
                         f.read(44)
                     while chunk := f.read(CHUNK_BYTES):
                         await ws.send(chunk)
+                        if realtime:
+                            await asyncio.sleep(chunk_seconds)
+                if trailing_silence_ms > 0:
+                    silence_bytes = trailing_silence_ms * 32
+                    offset = 0
+                    while offset < silence_bytes:
+                        chunk = b"\x00" * min(CHUNK_BYTES, silence_bytes - offset)
+                        await ws.send(chunk)
+                        offset += len(chunk)
                         if realtime:
                             await asyncio.sleep(chunk_seconds)
                 # Tell Telnyx we're done — finalize remaining audio immediately
@@ -254,6 +280,26 @@ _CURRENT_ITER: dict = {"idx": 0}
 TELNYX_GREEN = "#00E3AA"
 
 S_RULE = TELNYX_GREEN
+
+# Short display labels for model names in iteration scroll and result tables.
+# Keeps output compact — the full model name lives in the Result dataclass for JSON output.
+_DISPLAY_LABELS: dict[tuple[str, str], str] = {
+    ("Deepgram", "nova-3"): "nova-3",
+    ("Deepgram", "flux"): "flux",
+    ("AssemblyAI", "assemblyai/universal-streaming"): "aai/univ",
+    ("xAI", "xai/grok-stt"): "grok-stt",
+    ("Soniox", "soniox/stt-rt-preview"): "soniox",
+    ("Speechmatics", "speechmatics/rt"): "speechm",
+}
+
+
+def display_label(engine: str, model: Optional[str]) -> str:
+    """Return a short display label for an (engine, model) pair."""
+    if model and (engine, model) in _DISPLAY_LABELS:
+        return _DISPLAY_LABELS[(engine, model)]
+    if model:
+        return model
+    return engine.lower()
 S_SECTION = f"bold {TELNYX_GREEN}"
 S_DIM = "dim"
 S_BOLD = "bold"
@@ -365,12 +411,27 @@ async def main_async(args: argparse.Namespace) -> int:
         return 2
 
     if args.engine:
-        configs = [(args.engine, args.model)]
+        configs = [
+            BenchmarkConfig(
+                args.engine,
+                args.model,
+                args.language,
+                args.endpointing,
+                args.trailing_silence_ms,
+            )
+        ]
     else:
-        configs = [("Deepgram", "nova-3"), ("Deepgram", "flux")]
+        configs = [
+            BenchmarkConfig("Deepgram", "nova-3"),
+            BenchmarkConfig("Deepgram", "flux"),
+            BenchmarkConfig("AssemblyAI", "assemblyai/universal-streaming", language="en-US"),
+            BenchmarkConfig("xAI", "xai/grok-stt"),
+            BenchmarkConfig("Soniox", "soniox/stt-rt-preview", endpointing="500", trailing_silence_ms=2000),
+            BenchmarkConfig("Speechmatics", "speechmatics/rt"),
+        ]
 
     duration = audio_duration(args.audio)
-    _h1("TELNYX DEEPGRAM STT LATENCY BENCHMARK")
+    _h1("TELNYX STT LATENCY BENCHMARK")
     _console.print()
     _section("TEST CONFIGURATION")
 
@@ -388,6 +449,10 @@ async def main_async(args: argparse.Namespace) -> int:
         _cfg("Pre-warm:   ", f"{args.prewarm_ms}ms of silence to warm the connection")
     else:
         _cfg("Pre-warm:   ", "none (cold start)")
+    if args.trailing_silence_ms > 0:
+        _cfg("Trail stop: ", f"{args.trailing_silence_ms}ms of silence after speech")
+    elif any(config.trailing_silence_ms for config in configs):
+        _cfg("Trail stop: ", "engine-specific where required")
     _cfg("Pacing:     ", "realtime (1x) to simulate a live mic")
     _console.print()
     _preamble()
@@ -396,11 +461,10 @@ async def main_async(args: argparse.Namespace) -> int:
     _section("RUNNING")
     _console.print()
     for line in [
-        "  Each iteration runs both models back-to-back: nova-3, then flux.",
-        "  We do this so network jitter affects both equally — if your Wi-Fi",
-        "  blips, both models see it. Iteration 1 streams the live interim/",
-        "  final transcripts so you can see what the engine is hearing.",
-        "  Iterations 2+ show metrics only.",
+        "  Each iteration runs all models back-to-back so network jitter",
+        "  affects them equally — if your Wi-Fi blips, all models see it.",
+        "  Iteration 1 streams the live interim/final transcripts so you can",
+        "  see what the engine is hearing. Iterations 2+ show metrics only.",
     ]:
         _console.print(Text(line, style=S_PARAGRAPH))
     _console.print()
@@ -408,8 +472,10 @@ async def main_async(args: argparse.Namespace) -> int:
     all_results: list[Result] = []
     for run_idx in range(args.runs):
         _CURRENT_ITER["idx"] = run_idx + 1
-        for engine, model in configs:
-            model_label = model if model else (engine.lower())
+        for config in configs:
+            engine = config.engine
+            model = config.model
+            model_label = display_label(engine, model)
             max_idx_len = len(f"[{args.runs}/{args.runs}]")
             idx_str = f"[{run_idx + 1}/{args.runs}]".rjust(max_idx_len)
             demo = run_idx == 0
@@ -433,7 +499,13 @@ async def main_async(args: argparse.Namespace) -> int:
 
             r = await stream_one(
                 args.audio, engine, model, api_key, True,
-                prewarm_ms=args.prewarm_ms, strip_wav_header=args.strip_wav_header,
+                prewarm_ms=args.prewarm_ms,
+                trailing_silence_ms=config.trailing_silence_ms
+                if config.trailing_silence_ms is not None
+                else args.trailing_silence_ms,
+                language=config.language,
+                endpointing=config.endpointing,
+                strip_wav_header=args.strip_wav_header,
                 on_stream=stream_cb,
             )
             all_results.append(r)
@@ -468,8 +540,10 @@ async def main_async(args: argparse.Namespace) -> int:
 
     _console.print()
     _console.print(Text("  Transcripts captured:", style=S_DIM))
-    for engine, model in configs:
-        label = model if model else engine.lower()
+    for config in configs:
+        engine = config.engine
+        model = config.model
+        label = display_label(engine, model)
         rs = [r for r in all_results if r.engine == engine and r.model == model and not r.error]
         transcripts = [r.transcript.strip() for r in rs if r.transcript.strip()]
         if not transcripts:
@@ -503,7 +577,7 @@ def _stats(values: list[float]) -> tuple[float, float, float, float]:
     return (mean, p50, p95, variance ** 0.5)
 
 
-def print_aggregate(results: list[Result], configs: list[tuple[str, Optional[str]]], verbose: bool) -> None:
+def print_aggregate(results: list[Result], configs: list[BenchmarkConfig], verbose: bool) -> None:
     _console.print()
     _section("RESULTS")
     _console.print()
@@ -514,10 +588,12 @@ def print_aggregate(results: list[Result], configs: list[tuple[str, Optional[str
     ]:
         _console.print(Text(line, style=S_PARAGRAPH))
     _console.print()
-    for engine, model in configs:
+    for config in configs:
+        engine = config.engine
+        model = config.model
         rs = [r for r in results if r.engine == engine and r.model == model]
         ok = [r for r in rs if not r.error]
-        label = model if model else engine.lower()
+        label = display_label(engine, model)
 
         def wall(attr: str) -> list[float]:
             return [getattr(r, attr) for r in ok if getattr(r, attr) is not None]
@@ -590,9 +666,12 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Telnyx standalone STT latency test")
     p.add_argument("--audio", default="samples/sample.wav", help="path to WAV file (default: samples/sample.wav)")
     p.add_argument("--spoken", default="Hello, my name is Jon and I'm testing speech recognition.", help="text spoken in the audio file, displayed in the test configuration")
-    p.add_argument("--engine", help="single engine to test (Telnyx, Deepgram, Google, Azure). Default: nova-3+flux sweep")
-    p.add_argument("--model", help="model name (Deepgram only: nova-2, nova-3, flux)")
-    p.add_argument("--prewarm-ms", type=int, default=1000, help="send N ms of silence before real audio to warm the upstream connection + Deepgram VAD/model. Default 1000ms reflects the warmed-state latency a real voice agent experiences. Set to 0 to measure cold-start.")
+    p.add_argument("--engine", help="single engine to test (Deepgram, AssemblyAI, xAI, Soniox, Speechmatics, Google, Azure). Default: multi-engine sweep")
+    p.add_argument("--model", help="model name (Deepgram: nova-2, nova-3, flux; AssemblyAI: assemblyai/universal-streaming; xAI: xai/grok-stt; Soniox: soniox/stt-rt-preview; Speechmatics: speechmatics/rt)")
+    p.add_argument("--language", help="language hint for a single-engine test")
+    p.add_argument("--endpointing", help="endpointing value for a single-engine test")
+    p.add_argument("--prewarm-ms", type=int, default=1000, help="send N ms of silence before real audio to warm the upstream connection + VAD/model. Default 1000ms reflects the warmed-state latency a real voice agent experiences. Set to 0 to measure cold-start.")
+    p.add_argument("--trailing-silence-ms", type=int, default=0, help="send N ms of silence after real audio before closing the stream. Default 0 for single-engine tests; the default multi-engine sweep adds this only where required.")
     p.add_argument("--strip-wav-header", action="store_true", help="skip the 44-byte WAV header so only raw PCM is sent")
     p.add_argument("--runs", type=int, default=1, help="number of times to run each (engine, model) — reports mean/p50/p95/stddev (default: 1)")
     p.add_argument("--verbose", action="store_true", help="include first-final and last-final in the report (off by default)")
