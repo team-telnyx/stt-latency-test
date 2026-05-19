@@ -25,7 +25,7 @@ Once that works, use more runs for steadier numbers:
 .venv/bin/python run.py --runs 10
 ```
 
-Heads up: this tests every supported STT model 10 times, so it will take a few minutes. That's expected. Use `--runs 1` or test one model at a time if you just want a quick check.
+> **Heads up:** This tests every supported STT model 10 times, so it will take a few minutes. That's expected. Use `--runs 1` or test one model at a time if you just want a quick check.
 
 By default, the script tests the supported STT models side-by-side:
 
