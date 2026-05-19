@@ -2,46 +2,73 @@
 
 Measure how fast Telnyx STT actually responds, from your network — and learn what the numbers mean.
 
-## Pre-requisites
+## Prerequisites
 
-You'll need a Telnyx API key. Set it as an environment variable: `TELNYX_API_KEY`.
+You'll need Python 3.9+ and a Telnyx API key. Set the key as an environment variable: `TELNYX_API_KEY`.
 
 In the [Telnyx Portal](https://portal.telnyx.com), search for "API keys" once logged in and create one.
 
 ## Quick start
 
+Start with one run of the default sweep to verify your API key, network, and dependencies. This runs every supported engine once.
+
 ```
 python -m venv .venv
 .venv/bin/pip install -r requirements.txt
-export TELNYX_API_KEY="your-key-here"
+export TELNYX_API_KEY="***"
+.venv/bin/python run.py --runs 1
+```
+
+If that works, use `--runs 3` for a quick comparison or `--runs 10` for more stable medians.
+
+## Run one engine
+
+The full sweep can take a while because it runs every engine back-to-back. To test only one engine, pass `--engine` and `--model`.
+
+```
+# Deepgram Flux
+.venv/bin/python run.py --engine Deepgram --model flux --runs 3
+
+# Deepgram Nova 3
+.venv/bin/python run.py --engine Deepgram --model nova-3 --runs 3
+
+# AssemblyAI
+.venv/bin/python run.py --engine AssemblyAI --model assemblyai/universal-streaming --language en-US --runs 3
+
+# xAI Grok
+.venv/bin/python run.py --engine xAI --model xai/grok-stt --runs 3
+
+# Soniox
+.venv/bin/python run.py --engine Soniox --model soniox/stt-rt-preview --endpointing 500 --trailing-silence-ms 2000 --runs 3
+
+# Speechmatics
+.venv/bin/python run.py --engine Speechmatics --model speechmatics/rt --runs 3
+```
+
+Use `--runs 1` for smoke tests, `--runs 3` for quick comparisons, and `--runs 10` when you want more stable p50/p95 numbers.
+
+## Full benchmark sweep
+
+Run without `--engine` to benchmark Deepgram **nova-3**, Deepgram **flux**, **AssemblyAI**, **xAI Grok**, **Soniox**, and **Speechmatics** side-by-side.
+
+```
 .venv/bin/python run.py --runs 10
 ```
 
-The default run benchmarks Deepgram **nova-3**, Deepgram **flux**, **AssemblyAI**, **xAI Grok**, **Soniox**, and **Speechmatics** side-by-side. 10 iterations per model so you get stable medians, not one noisy sample.
+The sweep runs each iteration across all models back-to-back so short network changes affect each model roughly equally. 10 iterations per model gives you stable medians instead of one noisy sample.
 
 By default the harness sends 1 second of pre-warm silence before the test audio. The timer starts after pre-warm. The multi-engine sweep also applies fixture-specific settings where required so each engine can emit a usable final transcript.
 
 ## What you'll see
 
-After the test config and a quick read of the educational header, the script streams iteration 1 live so you can see what the engine is hearing — then iterations 2+ show tight one-line metrics.
+The script prints the test configuration, explains the metrics, streams iteration 1 live so you can see what the engine is hearing, then prints compact metrics for later iterations.
 
 **Example:**
 
 ```
-  [10/10] nova-3    ✓    EOU   396ms   first-int    88ms
-  [10/10] flux      ✓    EOU   410ms   first-int    95ms
-  [10/10] aai/univ  ✓    EOU   553ms   first-int  1506ms
-  [10/10] grok-stt  ✓    EOU   557ms   first-int   717ms
-  [10/10] soniox    ✓    EOU   714ms   first-int  1065ms
-  [10/10] speechm   ✓    EOU   453ms   first-int   970ms
-
-  Transcripts captured:
-    nova-3      10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
-    flux        10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
-    aai/univ  10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
-    grok-stt  10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
-    soniox    10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
-    speechm   10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
+  [3/3] nova-3    ✓    EOU   396ms   first-int    88ms
+  [3/3] flux      ✓    EOU   410ms   first-int    95ms
+  [3/3] aai/univ  ✓    EOU   553ms   first-int  1506ms
 
 ══════════════════════════════════════════════════════════════
   RESULTS
@@ -50,41 +77,14 @@ After the test config and a quick read of the educational header, the script str
   full number including your network — service-only is what we estimate
   the engine alone is doing. You see both, you do the math.
 
-  nova-3
-  (10/10 iterations)
-
-              service-only (- RTT)                wall-clock
-  EOU         mean  346ms  p50  343ms  p95  406ms   mean  418ms  p50  415ms  p95  478ms
-  first-int   mean    0ms  p50    0ms  p95   10ms   mean   49ms  p50   48ms  p95   62ms
-  total       mean 8138ms  p50 8133ms  p95 8218ms   mean 8210ms  p50 8205ms  p95 8290ms
-  RTT                                               mean   71ms  p50   71ms  p95   75ms
-
   flux
-  (10/10 iterations)
+  (3/3 iterations)
 
               service-only (- RTT)                wall-clock
   EOU         mean  322ms  p50  319ms  p95  381ms   mean  394ms  p50  391ms  p95  453ms
   first-int   mean    1ms  p50    0ms  p95   10ms   mean   52ms  p50   51ms  p95   63ms
   total       mean 8125ms  p50 8120ms  p95 8205ms   mean 8197ms  p50 8192ms  p95 8277ms
   RTT                                               mean   71ms  p50   71ms  p95   75ms
-
-  aai/universal
-  (10/10 iterations)
-
-              service-only (- RTT)                wall-clock
-  EOU         mean  350ms  p50  347ms  p95  410ms   mean  422ms  p50  419ms  p95  482ms
-  first-int   mean    3ms  p50    2ms  p95   12ms   mean   55ms  p50   54ms  p95   67ms
-  total       mean 8140ms  p50 8135ms  p95 8220ms   mean 8212ms  p50 8207ms  p95 8292ms
-  RTT                                               mean   72ms  p50   72ms  p95   76ms
-
-  grok-stt
-  (10/10 iterations)
-
-              service-only (- RTT)                wall-clock
-  EOU         mean  334ms  p50  331ms  p95  393ms   mean  406ms  p50  403ms  p95  465ms
-  first-int   mean    1ms  p50    0ms  p95    8ms   mean   48ms  p50   47ms  p95   60ms
-  total       mean 8130ms  p50 8125ms  p95 8210ms   mean 8202ms  p50 8197ms  p95 8282ms
-  RTT                                               mean   72ms  p50   72ms  p95   76ms
 ```
 
 ## What the numbers mean
@@ -102,7 +102,7 @@ Voice agents feel slow because of ONE number: **EOU latency** — the dead air b
 You'll see two side-by-side numbers per metric:
 
 - **wall-clock** — the raw measurement. Stopwatch from when audio starts flowing until the transcript locks. Includes your network round-trip in both directions, so it varies based on where you're running this.
-- **service-only** — an estimate of the engine alone. We approximate it by subtracting one measured RTT from the wall-clock number. It's not perfect — a more rigorous test would inject timestamps into the audio sample itself — but it's close enough to compare engines fairly across regions.
+- **service-only** — an estimate of the engine alone. We approximate it by subtracting one measured RTT from the wall-clock number. It's not perfect — a more rigorous test would inject timestamps into the audio sample itself — but it's close enough to compare engines fairly across regions. Very small values may show as `0ms` after RTT subtraction, especially for first interim.
 
 Wall-clock is the honest "what you'll see" number. Service-only isolates engine performance.
 
@@ -151,15 +151,6 @@ Two default configs are engine-specific:
 
 - AssemblyAI is run with `language=en-US` for the English sample.
 - Soniox is run with `endpointing=500` and 2 seconds of trailing silence; without this, it streams interim text but may not emit a complete final for this fixture.
-
-You can also test any single engine with `--engine` and `--model`:
-
-```
-python run.py --engine AssemblyAI --model assemblyai/universal-streaming
-python run.py --engine xAI --model xai/grok-stt
-python run.py --engine Soniox --model soniox/stt-rt-preview --endpointing 500 --trailing-silence-ms 2000
-python run.py --engine Speechmatics --model speechmatics/rt
-```
 
 ## Resources
 
