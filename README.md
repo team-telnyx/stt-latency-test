@@ -2,28 +2,49 @@
 
 Measure how fast Telnyx STT actually responds, from your network — and learn what the numbers mean.
 
-## Prerequisites
+## Pre-requisites
 
-You'll need Python 3.9+ and a Telnyx API key. Set the key as an environment variable: `TELNYX_API_KEY`.
+You'll need a Telnyx API key. Set it as an environment variable: `TELNYX_API_KEY`.
 
 In the [Telnyx Portal](https://portal.telnyx.com), search for "API keys" once logged in and create one.
 
 ## Quick start
 
-Start with one run of the default sweep to verify your API key, network, and dependencies. This runs every supported engine once.
-
 ```
 python -m venv .venv
 .venv/bin/pip install -r requirements.txt
-export TELNYX_API_KEY="***"
+export TELNYX_API_KEY="your-key-here"
 .venv/bin/python run.py --runs 1
 ```
 
-If that works, use `--runs 3` for a quick comparison or `--runs 10` for more stable medians.
+That first run is just a smoke test. It proves your key works, your machine can reach Telnyx, and the script is set up correctly.
 
-## Run one engine
+Once that works, use more runs for steadier numbers:
 
-The full sweep can take a while because it runs every engine back-to-back. To test only one engine, pass `--engine` and `--model`.
+```
+.venv/bin/python run.py --runs 10
+```
+
+> **Heads up:** This tests every supported STT model 10 times, so it will take a few minutes. That's expected. Use `--runs 1` or test one model at a time if you just want a quick check.
+
+By default, the script tests the supported STT models side-by-side:
+
+- Deepgram `nova-3`
+- Deepgram `flux`
+- AssemblyAI `assemblyai/universal-streaming`
+- xAI `xai/grok-stt`
+- Soniox `soniox/stt-rt-preview`
+- Speechmatics `speechmatics/rt`
+
+10 iterations per model gives you stable medians, not one noisy sample.
+
+The script sends 1 second of pre-warm silence before the test audio. The timer starts after pre-warm. This better matches a real voice agent where the STT connection is already open before the user starts talking.
+
+### Testing only one model
+
+If you only want to test one model, pass `--engine` and `--model`.
+
+The word `engine` comes from the Telnyx API. In plain English, think of it as the STT provider.
 
 ```
 # Deepgram Flux
@@ -45,30 +66,21 @@ The full sweep can take a while because it runs every engine back-to-back. To te
 .venv/bin/python run.py --engine Speechmatics --model speechmatics/rt --runs 3
 ```
 
-Use `--runs 1` for smoke tests, `--runs 3` for quick comparisons, and `--runs 10` when you want more stable p50/p95 numbers.
-
-## Full benchmark sweep
-
-Run without `--engine` to benchmark Deepgram **nova-3**, Deepgram **flux**, **AssemblyAI**, **xAI Grok**, **Soniox**, and **Speechmatics** side-by-side.
-
-```
-.venv/bin/python run.py --runs 10
-```
-
-The sweep runs each iteration across all models back-to-back so short network changes affect each model roughly equally. 10 iterations per model gives you stable medians instead of one noisy sample.
-
-By default the harness sends 1 second of pre-warm silence before the test audio. The timer starts after pre-warm. The multi-engine sweep also applies fixture-specific settings where required so each engine can emit a usable final transcript.
+Use `--runs 1` when you just want to make sure it works. Use `--runs 3` for a quick read. Use `--runs 10` when you want numbers you can compare with more confidence.
 
 ## What you'll see
 
-The script prints the test configuration, explains the metrics, streams iteration 1 live so you can see what the engine is hearing, then prints compact metrics for later iterations.
+After the test config and a quick read of the educational header, the script streams iteration 1 live so you can see what the model is hearing — then iterations 2+ show tight one-line metrics.
 
 **Example:**
 
 ```
-  [3/3] nova-3    ✓    EOU   396ms   first-int    88ms
-  [3/3] flux      ✓    EOU   410ms   first-int    95ms
-  [3/3] aai/univ  ✓    EOU   553ms   first-int  1506ms
+  [10/10] nova-3    ok    EOU   408ms   first-int    47ms
+  [10/10] flux      ok    EOU   384ms   first-int    51ms
+
+  Transcripts captured:
+    nova-3     10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
+    flux       10/10 agreed: "Hello, my name is Jon and I'm testing speech recognition."
 
 ══════════════════════════════════════════════════════════════
   RESULTS
@@ -77,13 +89,13 @@ The script prints the test configuration, explains the metrics, streams iteratio
   full number including your network — service-only is what we estimate
   the engine alone is doing. You see both, you do the math.
 
-  flux
-  (3/3 iterations)
+  nova-3
+  (10/10 iterations)
 
               service-only (- RTT)                wall-clock
-  EOU         mean  322ms  p50  319ms  p95  381ms   mean  394ms  p50  391ms  p95  453ms
-  first-int   mean    1ms  p50    0ms  p95   10ms   mean   52ms  p50   51ms  p95   63ms
-  total       mean 8125ms  p50 8120ms  p95 8205ms   mean 8197ms  p50 8192ms  p95 8277ms
+  EOU         mean  346ms  p50  343ms  p95  406ms   mean  418ms  p50  415ms  p95  478ms
+  first-int   mean    0ms  p50    0ms  p95   10ms   mean   49ms  p50   48ms  p95   62ms
+  total       mean 8138ms  p50 8133ms  p95 8218ms   mean 8210ms  p50 8205ms  p95 8290ms
   RTT                                               mean   71ms  p50   71ms  p95   75ms
 ```
 
@@ -102,15 +114,15 @@ Voice agents feel slow because of ONE number: **EOU latency** — the dead air b
 You'll see two side-by-side numbers per metric:
 
 - **wall-clock** — the raw measurement. Stopwatch from when audio starts flowing until the transcript locks. Includes your network round-trip in both directions, so it varies based on where you're running this.
-- **service-only** — an estimate of the engine alone. We approximate it by subtracting one measured RTT from the wall-clock number. It's not perfect — a more rigorous test would inject timestamps into the audio sample itself — but it's close enough to compare engines fairly across regions. Very small values may show as `0ms` after RTT subtraction, especially for first interim.
+- **service-only** — an estimate of the STT provider alone. We approximate it by subtracting one measured RTT from the wall-clock number. It's not perfect — a more rigorous test would inject timestamps into the audio sample itself — but it's close enough to compare models fairly across regions. Very small values may show as `0ms` after RTT subtraction, especially for first interim.
 
-Wall-clock is the honest "what you'll see" number. Service-only isolates engine performance.
+Wall-clock is the honest "what you'll see" number. Service-only isolates the STT provider.
 
 ## Metric reference
 
 **EOU ("End of Utterance")** — Time from when the user stopped talking until the transcript locked. The dead air your users feel. The number that decides how fast your bot replies.
 
-**first-int ("first interim", a.k.a. TTFT or Time To First Token)** — Time from when audio started flowing until the engine's first interim transcript appeared. Comes back fast. Don't optimize for it.
+**first-int ("first interim", a.k.a. TTFT or Time To First Token)** — Time from when audio started flowing until the model's first interim transcript appeared. Comes back fast. Don't optimize for it.
 
 **total** — End-to-end duration of one run. Sanity check, not a comparison metric.
 
@@ -122,35 +134,17 @@ Wall-clock is the honest "what you'll see" number. Service-only isolates engine 
 
 Plain-language definitions for the broader terms. Use these directly with customers.
 
-**Interim result** — A live guess. As you talk, the engine streams its best-guess-so-far text. These guesses change. Don't act on them — they're for showing "we're listening."
+**Interim result** — A live guess. As you talk, the model streams its best-guess-so-far text. These guesses change. Don't act on them — they're for showing "we're listening."
 
-**Final** — A locked-in chunk of transcript. The engine has decided this part won't change. Safe to feed downstream.
+**Final** — A locked-in chunk of transcript. The model has decided this part won't change. Safe to feed downstream.
 
 **Speech Final** — A special kind of final that also means "the user just finished talking." This is the signal your bot waits for before responding.
 
-**Endpointing** — How the engine decides "the user is done." It listens for silence — once silence lasts long enough, it fires a Speech Final. You can tune how patient it is.
+**Endpointing** — How the model decides "the user is done." It listens for silence — once silence lasts long enough, it fires a Speech Final. You can tune how patient it is.
 
-**VAD (Voice Activity Detection)** — The engine's "is someone talking right now?" detector. Drives endpointing and powers things like barge-in.
+**VAD (Voice Activity Detection)** — The model's "is someone talking right now?" detector. Drives endpointing and powers things like barge-in.
 
-**Pre-warm** — Sending a moment of silence before the real audio so the connection and model are already running. Avoids cold-start lag (~1 second penalty without it).
-
-## Supported engines
-
-The default sweep benchmarks six engines side-by-side:
-
-| Engine       | Model                          | Display label   | Best for                                    |
-| ------------ | ------------------------------ | --------------- | ------------------------------------------- |
-| **Deepgram** | `nova-3`                       | nova-3          | Highest English accuracy, diarization       |
-| **Deepgram** | `flux`                         | flux            | Lowest latency, built-in end-of-turn        |
-| **AssemblyAI** | `assemblyai/universal-streaming` | aai/univ | Low latency, built-in turn detection        |
-| **xAI**      | `xai/grok-stt`                  | grok-stt       | Multilingual auto-detection (25 languages)  |
-| **Soniox**   | `soniox/stt-rt-preview`         | soniox         | Low-latency realtime transcription          |
-| **Speechmatics** | `speechmatics/rt`             | speechm   | Realtime transcription with broad language coverage |
-
-Two default configs are engine-specific:
-
-- AssemblyAI is run with `language=en-US` for the English sample.
-- Soniox is run with `endpointing=500` and 2 seconds of trailing silence; without this, it streams interim text but may not emit a complete final for this fixture.
+**Pre-warm** — Sending a moment of silence before the real audio so the connection and model are already running. Avoids cold-start lag.
 
 ## Resources
 
